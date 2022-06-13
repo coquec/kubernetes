@@ -1,0 +1,1201 @@
+= Kubernetes
+:tags: Publish
+:author: Jose Couto
+:email: jcouto
+:date: junio 2022
+:revdate: 20220602
+:source-highlighter: rouge
+:toc:
+:toc-title: Índice
+:toclevels: 3
+:numbered:
+:appendix-caption: Apéndice
+:figure-caption: Figura
+:table-caption: Tabla
+
+== Kubernetes
+
+Kubernetes (abreviado, K8s), es un orquestador de contenedores.  Se encarga de
+ejecutarlos cuando se cumplan las condiciones adecuadas y de vigilar que tengan
+los recursos que necesiten.  Corre en un cluster de _nodos_, en el que uno o
+varios de ellos (los _masters_), ejecutan el __control plane_, que controla el
+cluster y tiene los siguientes componentes:
+
+* `etcd`, que guarda el estado completo del cluster: los parámetros de
+   configuración, las especificaciones y el estado de los trabajos.
+
+* `kube-controller-manager`, encargado de ejecutar los distintos bucles de
+   control o _controllers_ necesarios para alcanzar el estado deseado del
+   cluster, como los siguientes:
+
+** _Node controller_, que vigila los nodos y responde ante sus cambios.
+
+** _Job controller_, que vigila si es necesario lanzar trabajos y crea
+   <<pod,pods>> para hacerlo.
+
+** _Endpoints controller_, que asocia los servicios con los <<pod,pods>>.
+
+** _Service accounts_ y _Token controlers_, que crean las cuentas y los tokens
+   de acceso para las API de nuevos espacios de nombres.
+
+* `kube-scheduler`, que decide en qué nodo ejecutar un nuevo <<pod>>
+   ajustándose lo más posible a sus necesidades.
+
+* `kube-apiserver`, que proporciona una API para trabajar con K8s, y cuyo
+   principal cliente es la orden `kubectl`.
+
+Los clusters que corren en un proveedor en la nube también tienen un componente
+llamado `cloud-controller-manager`, que se encarga de ejecutar los
+controladores específicos para gestionar los recursos del proveedor.
+
+Todos los nodos son capaces de ejecutar trabajos, aunque suele evitarse hacer
+esto en los nodos que corren el control plane.  Para ejecutar trabajos, los
+nodos tienen:
+
+* Un proceso llamado `kubelet` que se encarga de comunicarse con el control
+  plane y ejecutar lo que les pidan.
+
+* El proceso `kube-proxy`, que se encarga de gestionar las reglas de red de los
+  nodos para permitir la comunicación con los <<pod,pods>> tanto dentro del
+  cluster como fuera.  Implementan el concepto de _servicio_.  Utiliza las
+  reglas de filtrado del sistema operativo si están disponibles, o hace de
+  proxy a nivel de aplicación si no.
+
+* Un _runtime_ para ejecutar los contenedores, como Docker, containerd, CRI-O,
+  rktlet...
+
+=== Instalación de un cluster de pruebas
+
+Podemos instalar un cluster de K8s en un equipo con Linux y Docker o Podman
+(para contenedores _rootless_), utilizando herramientas como
+https://kind.sigs.k8s.io/[kind] o https://minikube.sigs.k8s.io[minikube].  Kind
+funciona mejor con Podman, pero solo crea clusters con un nodo.  Para mis
+pruebas, utilizaré `minikube` con Docker, con un nodo master y dos adicionales,
+todo ello corriendo en una distribución Debian Sid..
+
+Instalamos Docker desde los repositorios de Debian:
+
+[source,console]
+----
+$ sudo apt install docker.io
+...
+
+$ docker version
+Client:
+ Version:           20.10.14+dfsg1
+ API version:       1.41
+ Go version:        go1.18.1
+ Git commit:        a224086
+ Built:             Sun May  1 19:59:40 2022
+ OS/Arch:           linux/amd64
+ Context:           default
+ Experimental:      true
+
+Server:
+ Engine:
+  Version:          20.10.14+dfsg1
+  API version:      1.41 (minimum version 1.12)
+  Go version:       go1.18.1
+  Git commit:       87a90dc
+  Built:            Sun May  1 19:59:40 2022
+  OS/Arch:          linux/amd64
+  Experimental:     false
+ containerd:
+  Version:          1.6.6~ds1
+  GitCommit:        1.6.6~ds1-1
+ runc:
+  Version:          1.1.1+ds1
+  GitCommit:        1.1.1+ds1-1+b1
+ docker-init:
+  Version:          0.19.0
+  GitCommit:        
+----
+
+Descargamos e instalamos el paquete de Debian de `minikube`, que solo tiene el
+ejecutable.
+
+[source,console]
+----
+$ cd /tmp
+$ curl -LO https://storage.googleapis.com/minikube/releases/latest/minikube_latest_amd64.deb
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+100 23.2M  100 23.2M    0     0  11.8M      0  0:00:01  0:00:01 --:--:-- 11.8M
+
+$ dpkg -I minikube_latest_amd64.deb 
+ new Debian package, version 2.0.
+ size 24363252 bytes: control archive=407 bytes.
+     406 bytes,    12 lines      control              
+ Package: minikube
+ Version: 1.25.2-0
+ Section: base
+ Priority: optional
+ Architecture: amd64
+ Recommends: virtualbox
+ Maintainer: Thomas Strömberg <t+minikube@stromberg.org>
+ Description: Minikube
+  minikube is a tool that makes it easy to run Kubernetes locally.
+  minikube runs a single-node Kubernetes cluster inside a VM on your
+  laptop for users looking to try out Kubernetes or develop with it 
+  day-to-day.
+
+$ sudo dpkg -i minikube_latest_amd64.deb
+Selecting previously unselected package minikube.
+(Reading database ... 297313 files and directories currently installed.)
+Preparing to unpack minikube_latest_amd64.deb ...
+Unpacking minikube (1.25.2-0) ...
+Setting up minikube (1.25.2-0) ...
+
+$ dpkg -L minikube
+/.
+/usr
+/usr/bin
+/usr/bin/minikube
+----
+
+Lanzamos `minikube` para que levante tres nodos sobre Docker:
+
+[source,console]
+----
+$ minikube start --kubernetes-version=latest --driver=docker --nodes=3
+😄  minikube v1.25.2 on Debian bookworm/sid
+✨  Using the docker driver based on user configuration
+👍  Starting control plane node minikube in cluster minikube
+🚜  Pulling base image ...
+💾  Downloading Kubernetes v1.23.4-rc.0 preload ...
+    > preloaded-images-k8s-v17-v1...: 505.63 MiB / 505.63 MiB  100.00% 10.88 Mi
+🔥  Creating docker container (CPUs=2, Memory=2200MB) ...
+🐳  Preparing Kubernetes v1.23.4-rc.0 on Docker 20.10.12 ...
+    ▪ kubelet.housekeeping-interval=5m
+    ▪ kubelet.cni-conf-dir=/etc/cni/net.mk
+    ▪ Generating certificates and keys ...
+    ▪ Booting up control plane ...
+    ▪ Configuring RBAC rules ...
+🔗  Configuring CNI (Container Networking Interface) ...
+🔎  Verifying Kubernetes components...
+    ▪ Using image gcr.io/k8s-minikube/storage-provisioner:v5
+🌟  Enabled addons: storage-provisioner, default-storageclass
+
+👍  Starting worker node minikube-m02 in cluster minikube
+🚜  Pulling base image ...
+🔥  Creating docker container (CPUs=2, Memory=2200MB) ...
+🌐  Found network options:
+    ▪ NO_PROXY=192.168.49.2
+🐳  Preparing Kubernetes v1.23.4-rc.0 on Docker 20.10.12 ...
+    ▪ env NO_PROXY=192.168.49.2
+🔎  Verifying Kubernetes components...
+
+👍  Starting worker node minikube-m03 in cluster minikube
+🚜  Pulling base image ...
+🔥  Creating docker container (CPUs=2, Memory=2200MB) ...
+
+🧯  Docker is nearly out of disk space, which may cause deployments to fail! (86% of capacity)
+💡  Suggestion: 
+
+    Try one or more of the following to free up space on the device:
+    
+    1. Run "docker system prune" to remove unused Docker data (optionally with "-a")
+    2. Increase the storage allocated to Docker for Desktop by clicking on:
+    Docker icon > Preferences > Resources > Disk Image Size
+    3. Run "minikube ssh -- docker system prune" if using the Docker container runtime
+🍿  Related issue: https://github.com/kubernetes/minikube/issues/9024
+
+🌐  Found network options:
+    ▪ NO_PROXY=192.168.49.2,192.168.49.3
+🐳  Preparing Kubernetes v1.23.4-rc.0 on Docker 20.10.12 ...
+    ▪ env NO_PROXY=192.168.49.2
+    ▪ env NO_PROXY=192.168.49.2,192.168.49.3
+🔎  Verifying Kubernetes components...
+🏄  Done! kubectl is now configured to use "minikube" cluster and "default" namespace by default
+----
+
+`minikube` crea una configuración para `kubectl` en `~/kube/config` para
+permitirle conectarse al cluster recién creado.
+
+Aunque recomienda definir el alias `kubectl='minikube kubectl --'` para
+utilizar su propio cliente de `kubectl`, para garantizar que usamos la misma
+versión del cliente y del servidor, pero con él
+https://github.com/kubernetes/minikube/issues/12938[no funciona el
+autocompletado].  En Debian, podemos instalar `kubectl` con un snap, aunque la
+versión de Debian es distinta que la que instala `minikube`:
+
+[source,console]
+----
+$ sudo snap install kubectl --classic
+2022-06-10T18:41:03+02:00 INFO Waiting for automatic snapd restart...
+kubectl 1.24.0 from Canonical✓ installed
+
+$ kubectl version --output=yaml
+clientVersion:
+  buildDate: "2022-05-04T02:28:17Z"
+  compiler: gc
+  gitCommit: 4ce5a8954017644c5420bae81d72b09b735c21f0
+  gitTreeState: clean
+  gitVersion: v1.24.0
+  goVersion: go1.18.1
+  major: "1"
+  minor: "24"
+  platform: linux/amd64
+kustomizeVersion: v4.5.4
+serverVersion:
+  buildDate: "2022-01-25T21:44:57Z"
+  compiler: gc
+  gitCommit: 72506a8439cb4465d176af044e4404439135c915
+  gitTreeState: clean
+  gitVersion: v1.23.4-rc.0
+  goVersion: go1.17.6
+  major: "1"
+  minor: 23+
+  platform: linux/amd64
+----
+
+=== API de Kubernetes
+
+`kube-apiserver` implementa un servicio API REST que utilizan los usuarios,
+partes del cluster y los componentes externos para interactuar con K8s.  La API
+permite consultar y manipular el estado de los _API objects_ de K8s, como
+<<pod,pods>>, namespaces, ConfigMaps, eventos...  Todas las entradas tienen el
+formato `<punto_de_entrada_a_API>/<group>/<version>/<resource>`
+
+Se puede ver qué APIs soporta un cluster con <<kubectl_api_versions>>, y qué
+recursos podemos manipular con <<kubectl_api_resources>>.
+
+La API de K8s requiere que los objetos se pasen en formato JSON. `kubectl` se
+encarga de convertir los objetos especificados como YAML a JSON.
+
+Para poder manipular un objeto en K8s, necesitamos:
+
+* *apiVersion*, la versión de la API que utiliza el objeto.
+
+* *kind*, la clase del objeto.
+
+* *metadata.name*, el nombre único del objeto en su namespace.
+
+* *metadata.namespace*, el namespace donde está definido el objeto (por
+   defecto, el actual o _current_).
+
+* *metadata.uid*, el identificador único generado para el objeto.
+
+En YAML, esto tendría el siguiente aspecto:
+
+[source,yaml]
+----
+apiVersion: v1
+kind: Pod
+metadata:
+    name: mypod
+    namespace: default
+    uid: '145c2436-e0bb-11ec-b44c-e7f1d45f0a43'
+----
+
+Los objetos de K8s pueden examinarse con <<kubectl_get>>.
+
+Las versiones de API `apiVersion` tienen tres niveles de soporte:
+
+* Alpha, para todos los nombres que contienen `alpha`, como `v1alpha2`.  No hay
+  ningún tipo de garantía sobre estas API: pueden cambiar o desaparecer en
+  cualquier momento.
+
+* Beta, para todos los nombres que contienen `beta`, como `v2beta1`.  Son API
+  probadas, aunque puede que se introduzcan pequeños cambios en versiones
+  posteriores beta o estables, que obliguen a recrear los objetos afectados.
+  Hay garantías de que no desaparecerán.  No se recomienda que se usen estas
+  API en producción, salvo que tengamos varios clusters que se puedan
+  actualizar de forma independiente.
+
+* Estable, que se refieren a todos los nombres que no contienen `alpha` ni
+  `beta`.
+
+=== Control de acceso a la API
+
+WARNING: https://kubernetes.io/docs/concepts/security/controlling-access/[TODO].
+
+Por defecto, la API de K8s está accesible en dos direcciones, una insegura y
+otra segura.  La dirección insegura está pensada para hacer diagnóstico, y se
+encuentra en la dirección `localhost:8080` de los nodos que tienen el control
+plane. Utiliza HTTP en claro y no requiere autenticación ni autorización,
+aunque sí que aplican los módulos de control de entrada (_admission control_).
+La dirección segura es la que usamos habitualmente con `kubectl`.
+
+=== Etiquetas
+
+Todos los objetos de K8s pueden tener etiquetas asociadas (<<label,_labels_>>),
+que se utilizan para agruparlos de forma lógica, pudiéndose utilizar en los
+seleccionadores (<<selector,_selectors_>>).  Podemos crear o modificar Las
+etiquetas de los objetos en cualquier momento.
+
+Las etiquetas y los seleccionadores pueden usarse para cosas como decidir en
+qué nodos del cluster deben ejecutarse determinados servicios o el tipo de
+almacenamiento a utilizar.
+
+Las etiquetas se asignan como parte de los metadatos de un objeto:
+
+[source,yaml]
+----
+metadata:
+  labels:
+    key1: value1
+    key2: value2
+----
+
+Las claves tienen la forma `[prefijo/]nombre`, con un prefijo opcional que
+tiene la forma de un dominio DNS, y un nombre obligatorio que empieza y termina
+por un carácter alfanumérico y que puede incluir entre medias eso mismo más
+`-`, `_` y `.`.  Se entiende que las claves sin prefijo son privadas para los
+usuarios.  Todas las etiquetas que utilizan los componentes propios de K8s
+tienen prefijo.  Los prefijos `kubernetes.io` y `k8s.io` están reservados para
+ellos.
+
+K8s
+https://kubernetes.io/docs/concepts/overview/working-with-objects/common-labels/[recomienda]
+utilizar algunas etiquetas para agrupar objetos, todas con el prefijo
+`app.kubernetes.io`.
+
+NOTE: Es importante que las organizaciones definan un conjunto estándar de
+etiquetas para facilitar la gestión de los objetos de sus clusters, y que se
+utilicen en las plantillas de los distintos objetos.
+
+[[seleccionadores,_seleccionadores_]]
+=== Seleccionadores
+
+Son filtros que permiten elegir objetos de K8s basándose en valores de sus
+etiquetas.  Los hay de dos tipos, los basados en la igualdad y los que permiten
+buscar en conjuntos de valores.
+
+.Seleccionador basado en la igualdad
+[source,yaml]
+----
+selector:
+  matchLabels:
+    key1: value
+----
+
+Los seleccionadores basados en la igualdad admiten tres operadores, `=` e `==`,
+que son equivalentes y requieren que las etiquetas sean iguales a un valor, y
+`!=`, para requerir que sean distintas a un valor *o que el objeto no tenga esa
+etiqueta*.  Pueden tener uno o varios requisitos separados por comas, que
+actúan como un AND lógico (deben cumplirse todos los requisitos):
+
+[source,console]
+----
+$ get pods --selector environment=pro,tier!=frontend
+----
+
+WARNING: Parece que no hay forma de conseguir el efecto de `!=` en YAML con los
+seleccionadores basados en igualdad.  Se puede conseguir algo similar con los
+seleccionadores basados en conjuntos y el operador `NotIn`, pero no todos los
+objetos de K8s soportan este tipo de seleccionadores.
+
+WARNING: No hay operador OR para ninguno de los dos tipos de seleccionadores.
+
+.Seleccionador basado en conjuntos [source,yaml]
+----
+selector:
+  matchExpressions:
+  - key: key1
+    operator: In
+    values:
+    - value1
+    - value2
+----
+
+Este tipo de seleccionadores admite los operadores `In`, `NotIn`, `Exists`,
+`DoesNotExist`, `Gt` y `Lt`.
+
+== CLI de kubectl
+
+`kubectl` es el cliente más habitual para trabajar con la API de K8s.  Funciona
+por línea de comandos, y su configuración se guarda en `~/.kube/config`,
+incluyendo la URL del cluster y las credenciales de autenticación.
+
+Los archivos de configuración de `kubectl` se conocen como _kubeconfigs_.  Se
+puede decir a `kubectl` qué archivo usar con la opción global
+`--kubeconfig=<archivo>`.
+
+=== Autocompletado
+
+`kubectl completion <shell>` genera las órdenes necesarias para tener
+autocompletado con distintos shells.  Para `fish`, basta con meter lo siguiente
+en `~/.config/fish/config.fish`:
+
+[source]
+----
+kubectl completion fish | source
+----
+
+
+=== Información sobre el cluster
+
+[[kubectl_api_resources,`kubectl api-resources`]]
+==== kubectl api-resources
+
+Muestra los recursos disponibles a través de la API del cluster:
+
+[source,console]
+----
+$ kubectl api-resources 
+NAME                              SHORTNAMES   APIVERSION                             NAMESPACED   KIND
+bindings                                       v1                                     true         Binding
+componentstatuses                 cs           v1                                     false        ComponentStatus
+configmaps                        cm           v1                                     true         ConfigMap
+endpoints                         ep           v1                                     true         Endpoints
+events                            ev           v1                                     true         Event
+limitranges                       limits       v1                                     true         LimitRange
+namespaces                        ns           v1                                     false        Namespace
+nodes                             no           v1                                     false        Node
+persistentvolumeclaims            pvc          v1                                     true         PersistentVolumeClaim
+persistentvolumes                 pv           v1                                     false        PersistentVolume
+pods                              po           v1                                     true         Pod
+podtemplates                                   v1                                     true         PodTemplate
+replicationcontrollers            rc           v1                                     true         ReplicationController
+resourcequotas                    quota        v1                                     true         ResourceQuota
+secrets                                        v1                                     true         Secret
+serviceaccounts                   sa           v1                                     true         ServiceAccount
+services                          svc          v1                                     true         Service
+mutatingwebhookconfigurations                  admissionregistration.k8s.io/v1        false        MutatingWebhookConfiguration
+validatingwebhookconfigurations                admissionregistration.k8s.io/v1        false        ValidatingWebhookConfiguration
+customresourcedefinitions         crd,crds     apiextensions.k8s.io/v1                false        CustomResourceDefinition
+apiservices                                    apiregistration.k8s.io/v1              false        APIService
+controllerrevisions                            apps/v1                                true         ControllerRevision
+daemonsets                        ds           apps/v1                                true         DaemonSet
+deployments                       deploy       apps/v1                                true         Deployment
+replicasets                       rs           apps/v1                                true         ReplicaSet
+statefulsets                      sts          apps/v1                                true         StatefulSet
+tokenreviews                                   authentication.k8s.io/v1               false        TokenReview
+localsubjectaccessreviews                      authorization.k8s.io/v1                true         LocalSubjectAccessReview
+selfsubjectaccessreviews                       authorization.k8s.io/v1                false        SelfSubjectAccessReview
+selfsubjectrulesreviews                        authorization.k8s.io/v1                false        SelfSubjectRulesReview
+subjectaccessreviews                           authorization.k8s.io/v1                false        SubjectAccessReview
+horizontalpodautoscalers          hpa          autoscaling/v2                         true         HorizontalPodAutoscaler
+cronjobs                          cj           batch/v1                               true         CronJob
+jobs                                           batch/v1                               true         Job
+certificatesigningrequests        csr          certificates.k8s.io/v1                 false        CertificateSigningRequest
+leases                                         coordination.k8s.io/v1                 true         Lease
+endpointslices                                 discovery.k8s.io/v1                    true         EndpointSlice
+events                            ev           events.k8s.io/v1                       true         Event
+flowschemas                                    flowcontrol.apiserver.k8s.io/v1beta2   false        FlowSchema
+prioritylevelconfigurations                    flowcontrol.apiserver.k8s.io/v1beta2   false        PriorityLevelConfiguration
+ingressclasses                                 networking.k8s.io/v1                   false        IngressClass
+ingresses                         ing          networking.k8s.io/v1                   true         Ingress
+networkpolicies                   netpol       networking.k8s.io/v1                   true         NetworkPolicy
+runtimeclasses                                 node.k8s.io/v1                         false        RuntimeClass
+poddisruptionbudgets              pdb          policy/v1                              true         PodDisruptionBudget
+podsecuritypolicies               psp          policy/v1beta1                         false        PodSecurityPolicy
+clusterrolebindings                            rbac.authorization.k8s.io/v1           false        ClusterRoleBinding
+clusterroles                                   rbac.authorization.k8s.io/v1           false        ClusterRole
+rolebindings                                   rbac.authorization.k8s.io/v1           true         RoleBinding
+roles                                          rbac.authorization.k8s.io/v1           true         Role
+priorityclasses                   pc           scheduling.k8s.io/v1                   false        PriorityClass
+csidrivers                                     storage.k8s.io/v1                      false        CSIDriver
+csinodes                                       storage.k8s.io/v1                      false        CSINode
+csistoragecapacities                           storage.k8s.io/v1beta1                 true         CSIStorageCapacity
+storageclasses                    sc           storage.k8s.io/v1                      false        StorageClass
+volumeattachments                              storage.k8s.io/v1                      false        VolumeAttachment
+----
+
+[[kubectl_api_versions,`kubectl api-versions`]]
+==== kubectl api-versions
+
+Muestra las API soportadas por un cluster de K8s:
+
+[source,console]
+----
+$ kubectl api-versions
+admissionregistration.k8s.io/v1
+apiextensions.k8s.io/v1
+apiregistration.k8s.io/v1
+apps/v1
+authentication.k8s.io/v1
+authorization.k8s.io/v1
+autoscaling/v1
+autoscaling/v2
+autoscaling/v2beta1
+autoscaling/v2beta2
+batch/v1
+batch/v1beta1
+certificates.k8s.io/v1
+coordination.k8s.io/v1
+discovery.k8s.io/v1
+discovery.k8s.io/v1beta1
+events.k8s.io/v1
+events.k8s.io/v1beta1
+flowcontrol.apiserver.k8s.io/v1beta1
+flowcontrol.apiserver.k8s.io/v1beta2
+networking.k8s.io/v1
+node.k8s.io/v1
+node.k8s.io/v1beta1
+policy/v1
+policy/v1beta1
+rbac.authorization.k8s.io/v1
+scheduling.k8s.io/v1
+storage.k8s.io/v1
+storage.k8s.io/v1beta1
+v1
+----
+
+[[kubectl_cluster_info,kubectl cluster-info]]
+==== kubectl cluster-info [dump]
+
+Muestra información sobre el cluster, incluyendo el punto de entrada a la API.
+Con la opción `dump`, se muestra información completa en formato JSON:
+
+[source,console]
+----
+$ kubectl cluster-info
+Kubernetes control plane is running at https://192.168.49.2:8443
+CoreDNS is running at https://192.168.49.2:8443/api/v1/namespaces/kube-system/services/kube-dns:dns/proxy
+
+To further debug and diagnose cluster problems, use 'kubectl cluster-info dump'.
+----
+
+[[kubectl_describe,`kubectl describe`]]
+==== kubectl describe
+
+Muestra los detalles de un recurso o de un grupo de recursos:
+
+[source,console]
+----
+$ kubectl describe node k8s-control-plane
+Name:               k8s-control-plane
+Roles:              control-plane
+Labels:             beta.kubernetes.io/arch=amd64
+                    beta.kubernetes.io/os=linux
+                    kubernetes.io/arch=amd64
+                    kubernetes.io/hostname=k8s-control-plane
+                    kubernetes.io/os=linux
+                    node-role.kubernetes.io/control-plane=
+                    node.kubernetes.io/exclude-from-external-load-balancers=
+Annotations:        kubeadm.alpha.kubernetes.io/cri-socket: unix:///run/containerd/containerd.sock
+                    node.alpha.kubernetes.io/ttl: 0
+                    volumes.kubernetes.io/controller-managed-attach-detach: true
+CreationTimestamp:  Thu, 26 May 2022 14:36:42 +0200
+Taints:             <none>
+Unschedulable:      false
+Lease:
+  HolderIdentity:  k8s-control-plane
+  AcquireTime:     <unset>
+  RenewTime:       Tue, 31 May 2022 13:13:46 +0200
+Conditions:
+  Type             Status  LastHeartbeatTime                 LastTransitionTime                Reason                       Message
+  ----             ------  -----------------                 ------------------                ------                       -------
+  MemoryPressure   False   Tue, 31 May 2022 13:11:55 +0200   Thu, 26 May 2022 14:36:39 +0200   KubeletHasSufficientMemory   kubelet has sufficient memory available
+  DiskPressure     False   Tue, 31 May 2022 13:11:55 +0200   Thu, 26 May 2022 14:36:39 +0200   KubeletHasNoDiskPressure     kubelet has no disk pressure
+  PIDPressure      False   Tue, 31 May 2022 13:11:55 +0200   Thu, 26 May 2022 14:36:39 +0200   KubeletHasSufficientPID      kubelet has sufficient PID available
+  Ready            True    Tue, 31 May 2022 13:11:55 +0200   Thu, 26 May 2022 14:37:18 +0200   KubeletReady                 kubelet is posting ready status
+Addresses:
+  InternalIP:  10.89.0.2
+  Hostname:    k8s-control-plane
+Capacity:
+  cpu:            4
+  hugepages-1Gi:  0
+  hugepages-2Mi:  0
+  memory:         16314336Ki
+  pods:           110
+Allocatable:
+  cpu:            4
+  hugepages-1Gi:  0
+  hugepages-2Mi:  0
+  memory:         16314336Ki
+  pods:           110
+System Info:
+  Machine ID:                 07512f26531849baaff20c4813e9e619
+  System UUID:                0933fcdc-ed26-4e74-92c8-a184f83f8410
+  Boot ID:                    1d5b5647-f3f1-46dc-9418-e4d8485e262a
+  Kernel Version:             5.17.0-1-amd64
+  OS Image:                   Ubuntu 21.10
+  Operating System:           linux
+  Architecture:               amd64
+  Container Runtime Version:  containerd://1.6.4
+  Kubelet Version:            v1.24.0
+  Kube-Proxy Version:         v1.24.0
+PodCIDR:                      10.244.0.0/24
+PodCIDRs:                     10.244.0.0/24
+ProviderID:                   kind://podman/k8s/k8s-control-plane
+Non-terminated Pods:          (9 in total)
+  Namespace                   Name                                         CPU Requests  CPU Limits  Memory Requests  Memory Limits  Age
+  ---------                   ----                                         ------------  ----------  ---------------  -------------  ---
+  kube-system                 coredns-6d4b75cb6d-djsz9                     100m (2%)     0 (0%)      70Mi (0%)        170Mi (1%)     4d22h
+  kube-system                 coredns-6d4b75cb6d-hk54n                     100m (2%)     0 (0%)      70Mi (0%)        170Mi (1%)     4d22h
+  kube-system                 etcd-k8s-control-plane                       100m (2%)     0 (0%)      100Mi (0%)       0 (0%)         4d22h
+  kube-system                 kindnet-j4c4s                                100m (2%)     100m (2%)   50Mi (0%)        50Mi (0%)      4d22h
+  kube-system                 kube-apiserver-k8s-control-plane             250m (6%)     0 (0%)      0 (0%)           0 (0%)         4d22h
+  kube-system                 kube-controller-manager-k8s-control-plane    200m (5%)     0 (0%)      0 (0%)           0 (0%)         4d22h
+  kube-system                 kube-proxy-v258n                             0 (0%)        0 (0%)      0 (0%)           0 (0%)         4d22h
+  kube-system                 kube-scheduler-k8s-control-plane             100m (2%)     0 (0%)      0 (0%)           0 (0%)         4d22h
+  local-path-storage          local-path-provisioner-9cd9bd544-hvlm8       0 (0%)        0 (0%)      0 (0%)           0 (0%)         4d22h
+Allocated resources:
+  (Total limits may be over 100 percent, i.e., overcommitted.)
+  Resource           Requests    Limits
+  --------           --------    ------
+  cpu                950m (23%)  100m (2%)
+  memory             290Mi (1%)  390Mi (2%)
+  ephemeral-storage  0 (0%)      0 (0%)
+  hugepages-1Gi      0 (0%)      0 (0%)
+  hugepages-2Mi      0 (0%)      0 (0%)
+Events:
+  Type    Reason          Age   From             Message
+  ----    ------          ----  ----             -------
+  Normal  RegisteredNode  55m   node-controller  Node k8s-control-plane event: Registered Node k8s-control-plane in Controller
+----
+
+[source,console]
+----
+$ kubectl describe pod coredns-6d4b75cb6d-djsz9 -n kube-system
+Name:                 coredns-6d4b75cb6d-djsz9
+Namespace:            kube-system
+Priority:             2000000000
+Priority Class Name:  system-cluster-critical
+Node:                 k8s-control-plane/10.89.0.2
+Start Time:           Thu, 26 May 2022 14:37:18 +0200
+Labels:               k8s-app=kube-dns
+                      pod-template-hash=6d4b75cb6d
+Annotations:          <none>
+Status:               Running
+IP:                   10.244.0.3
+IPs:
+  IP:           10.244.0.3
+Controlled By:  ReplicaSet/coredns-6d4b75cb6d
+Containers:
+  coredns:
+    Container ID:  containerd://052d77f0d5db7fdebbdcec64b99272e06837e07e056abd61ad0e0be096188bfd
+    Image:         k8s.gcr.io/coredns/coredns:v1.8.6
+    Image ID:      sha256:a4ca41631cc7ac19ce1be3ebf0314ac5f47af7c711f17066006db82ee3b75b03
+    Ports:         53/UDP, 53/TCP, 9153/TCP
+    Host Ports:    0/UDP, 0/TCP, 0/TCP
+    Args:
+      -conf
+      /etc/coredns/Corefile
+    State:          Running
+      Started:      Thu, 26 May 2022 14:37:25 +0200
+    Ready:          True
+    Restart Count:  0
+    Limits:
+      memory:  170Mi
+    Requests:
+      cpu:        100m
+      memory:     70Mi
+    Liveness:     http-get http://:8080/health delay=60s timeout=5s period=10s #success=1 #failure=5
+    Readiness:    http-get http://:8181/ready delay=0s timeout=1s period=10s #success=1 #failure=3
+    Environment:  <none>
+    Mounts:
+      /etc/coredns from config-volume (ro)
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-rvff5 (ro)
+Conditions:
+  Type              Status
+  Initialized       True 
+  Ready             True 
+  ContainersReady   True 
+  PodScheduled      True 
+Volumes:
+  config-volume:
+    Type:      ConfigMap (a volume populated by a ConfigMap)
+    Name:      coredns
+    Optional:  false
+  kube-api-access-rvff5:
+    Type:                    Projected (a volume that contains injected data from multiple sources)
+    TokenExpirationSeconds:  3607
+    ConfigMapName:           kube-root-ca.crt
+    ConfigMapOptional:       <nil>
+    DownwardAPI:             true
+QoS Class:                   Burstable
+Node-Selectors:              kubernetes.io/os=linux
+Tolerations:                 CriticalAddonsOnly op=Exists
+                             node-role.kubernetes.io/control-plane:NoSchedule
+                             node-role.kubernetes.io/master:NoSchedule
+                             node.kubernetes.io/not-ready:NoExecute op=Exists for 300s
+                             node.kubernetes.io/unreachable:NoExecute op=Exists for 300s
+Events:                      <none>
+----
+
+
+[[kubectl_get,`kubectl get`]]
+==== kubectl get
+
+Devuelve distinta información sobre el cluster, como los nodos, los
+<<pod,pods>> que hay corriendo...
+
+[source,console]
+----
+$ kubectl get nodes -o wide
+NAME                STATUS   ROLES           AGE    VERSION   INTERNAL-IP   EXTERNAL-IP   OS-IMAGE       KERNEL-VERSION   CONTAINER-RUNTIME
+k8s-control-plane   Ready    control-plane   4d2h   v1.24.0   10.89.0.2     <none>        Ubuntu 21.10   5.17.0-1-amd64   containerd://1.6.4
+----
+
+[source,console]
+----
+$ kubectl get pods --all-namespaces
+NAMESPACE            NAME                                        READY   STATUS    RESTARTS        AGE
+kube-system          coredns-6d4b75cb6d-djsz9                    1/1     Running   0               4d2h
+kube-system          coredns-6d4b75cb6d-hk54n                    1/1     Running   0               4d2h
+kube-system          etcd-k8s-control-plane                      1/1     Running   0               4d2h
+kube-system          kindnet-j4c4s                               1/1     Running   0               4d2h
+kube-system          kube-apiserver-k8s-control-plane            1/1     Running   0               4d2h
+kube-system          kube-controller-manager-k8s-control-plane   1/1     Running   2 (6h41m ago)   4d2h
+kube-system          kube-proxy-v258n                            1/1     Running   0               4d2h
+kube-system          kube-scheduler-k8s-control-plane            1/1     Running   1 (6h53m ago)   4d2h
+local-path-storage   local-path-provisioner-9cd9bd544-hvlm8      1/1     Running   0               4d2h
+----
+
+[source,console]
+----
+$ kubectl get pods --all-namespaces -o wide
+NAMESPACE            NAME                                        READY   STATUS    RESTARTS        AGE    IP           NODE                NOMINATED NODE   READINESS GATES
+kube-system          coredns-6d4b75cb6d-djsz9                    1/1     Running   0               4d2h   10.244.0.3   k8s-control-plane   <none>           <none>
+kube-system          coredns-6d4b75cb6d-hk54n                    1/1     Running   0               4d2h   10.244.0.4   k8s-control-plane   <none>           <none>
+kube-system          etcd-k8s-control-plane                      1/1     Running   0               4d2h   10.89.0.2    k8s-control-plane   <none>           <none>
+kube-system          kindnet-j4c4s                               1/1     Running   0               4d2h   10.89.0.2    k8s-control-plane   <none>           <none>
+kube-system          kube-apiserver-k8s-control-plane            1/1     Running   0               4d2h   10.89.0.2    k8s-control-plane   <none>           <none>
+kube-system          kube-controller-manager-k8s-control-plane   1/1     Running   2 (6h40m ago)   4d2h   10.89.0.2    k8s-control-plane   <none>           <none>
+kube-system          kube-proxy-v258n                            1/1     Running   0               4d2h   10.89.0.2    k8s-control-plane   <none>           <none>
+kube-system          kube-scheduler-k8s-control-plane            1/1     Running   1 (6h52m ago)   4d2h   10.89.0.2    k8s-control-plane   <none>           <none>
+local-path-storage   local-path-provisioner-9cd9bd544-hvlm8      1/1     Running   0               4d2h   10.244.0.2   k8s-control-plane   <none>           <none>
+----
+
+[source,console]
+----
+$ kubectl get pod coredns-6d4b75cb6d-djsz9 -n kube-system
+NAME                       READY   STATUS    RESTARTS   AGE
+coredns-6d4b75cb6d-djsz9   1/1     Running   0          4d2h
+----
+
+
+[source,console]
+----
+$ kubectl get services
+NAME         TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)   AGE
+kubernetes   ClusterIP   10.96.0.1    <none>        443/TCP   4d2h
+----
+
+Por defecto, hay algunos tipos de recursos dentro de los namespaces que no se
+muestran en la salida de `kubectl get all`.  Se puede utilizar lo siguiente
+para verlos todos:
+
+[source,console]
+----
+$ kubectl api-resources --verbs=list --namespaced -o name | xargs -n1 kubectl get --show-kind --ignore-not-found --all-namespaces
+NAMESPACE            NAME                                           DATA   AGE
+default              configmap/kube-root-ca.crt                     1      5d2h
+kube-node-lease      configmap/kube-root-ca.crt                     1      5d2h
+kube-public          configmap/cluster-info                         1      5d2h
+kube-public          configmap/kube-root-ca.crt                     1      5d2h
+kube-system          configmap/coredns                              1      5d2h
+kube-system          configmap/extension-apiserver-authentication   6      5d2h
+kube-system          configmap/kube-proxy                           2      5d2h
+kube-system          configmap/kube-root-ca.crt                     1      5d2h
+kube-system          configmap/kubeadm-config                       1      5d2h
+kube-system          configmap/kubelet-config                       1      5d2h
+local-path-storage   configmap/kube-root-ca.crt                     1      5d2h
+local-path-storage   configmap/local-path-config                    4      5d2h
+NAMESPACE     NAME                   ENDPOINTS                                               AGE
+default       endpoints/kubernetes   10.89.0.2:6443                                          5d2h
+kube-system   endpoints/kube-dns     10.244.0.3:53,10.244.0.4:53,10.244.0.3:53 + 3 more...   5d2h
+...
+...
+----
+
+=== Manipulación del cluster
+
+[[kubectl_apply,`kubectl apply`]]
+==== kubectl apply
+
+Aplica al cluster la configuración indicada en el archivo YAML o JSON
+especificado con `-f` (o desde la entrada estándar, con `-f{nbsp}-`), haciendo
+los cambios necesarios sobre la configuración actual.
+
+También se puede utilizar la opción `-k` para especificar un archivo
+`kustomization.yaml`, que permite hacer referencia a varios archivos donde
+especificar los recursos, y asignarles valores comunes, como el namespace o
+etiquetas.  Los siguientes ejemplos son de la
+https://kubectl.docs.kubernetes.io/references/kubectl/apply/[documentación de
+`kubectl`]:
+
+[source,yaml]
+----
+# kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# list of Resource Config to be Applied
+resources:
+- deployment.yaml
+
+# namespace to deploy all Resources to
+namespace: default
+
+# labels added to all Resources
+commonLabels:
+  app: example
+  env: test
+----
+
+[source,yaml]
+----
+# deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: the-deployment
+spec:
+  replicas: 5
+  template:
+    containers:
+      - name: the-container
+        image: registry/container:latest
+----
+
+Se puede usar la orden `edit-last-applied` para editar la última configuración
+aplicada, y `view-last-applied` para mostrarla.
+
+Con la opción `--prune`, se eliminan los objetos del cluster que no estén en la
+configuración aplicada.
+
+
+[[kubectl_create,`kubectl create`]]
+==== kubectl create
+
+Crea los recursos especificados en el archivo YAML o JSON pasado con la opción
+`-f` (o desde la entrada estándar, con `-f{nbsp}-`).
+
+[[kubectl_delete,`kubectl delete`]]
+==== kubectl delete
+
+Elimina los recursos especificados en el archivo YAML o JSON pasado con la
+opción `-f` (o desde la entrada estándar, con `-f{nbsp}-`), o los indicados por
+nombre o por etiqueta.
+
+[[kubectl_edit,`kubectl edit`]]
+==== kubectl edit
+
+Edita el objeto especificado en el archivo YAML o JSON pasado con la opción
+`-f` (o desde la entrada estándar, con `-f{nbsp}-`), o los indicados por nombre
+o por etiqueta.  Utiliza el editor especificado en las variables de entorno
+`EDITOR` o `KUBE_EDITOR`, o con `vi` si no están definidas.  Puede editar
+varios objetos, pero de uno en uno.
+
+=== Namespaces
+
+Los _namespaces_ son una forma de hacer compartimentos dentro de Kubernetes, de
+manera que se puede limitar la visibilidad de los recursos.
+
+Los nombres de los recursos deben de ser únicos dentro de un namespace, pero se
+pueden repetir entre namespaces.
+
+El prefijo `kube-` está reservado para uso interno de K8s.
+
+Por defecto, hay cuatro namespaces:
+
+* *default*, para los objetos que no están en ningún otro namespace.
+
+* *kube-system*, para los objetos creados y gestionados por K8s.
+
+* *kube-public*, para objetos públicos que puede ver cualquier usuario, incluso
+   sin estar autenticado, y para los recursos que deban ser vistos por el
+   cluster completo.
+
+* *kube-node-lease*, para guardar información sobre los heartbeats de los
+   nodos, de manera que el plano de control pueda detectar su caída.
+
+El nombre que los servicios tienen en el DNS de K8s incluye el namespace
+(`<servicio>.<namespace>.svc.cluster.local`), por lo que los contenedores solo
+verán los servicios que tengan en su propio namespace, a menos que especifiquen
+el dominio DNS completo.  Como el nombre de los namespaces se usa en el DNS,
+solo deben de tener caracteres válidos para DNS (63 caracteres máximo, solo
+letras minúsculas o guiones, y empezar y terminar con un carácter
+alfanumérico).
+
+No todos los tipos de recursos pueden estar dentro de un namespace, como los
+nodos o los propios namespaces (no se pueden anidar).  Se puede ver la lista
+completa así:
+
+[source,console]
+----
+$ kubectl api-resources --namespaced=false
+NAME                              SHORTNAMES   APIVERSION                             NAMESPACED   KIND
+componentstatuses                 cs           v1                                     false        ComponentStatus
+namespaces                        ns           v1                                     false        Namespace
+nodes                             no           v1                                     false        Node
+persistentvolumes                 pv           v1                                     false        PersistentVolume
+mutatingwebhookconfigurations                  admissionregistration.k8s.io/v1        false        MutatingWebhookConfiguration
+validatingwebhookconfigurations                admissionregistration.k8s.io/v1        false        ValidatingWebhookConfiguration
+customresourcedefinitions         crd,crds     apiextensions.k8s.io/v1                false        CustomResourceDefinition
+apiservices                                    apiregistration.k8s.io/v1              false        APIService
+tokenreviews                                   authentication.k8s.io/v1               false        TokenReview
+selfsubjectaccessreviews                       authorization.k8s.io/v1                false        SelfSubjectAccessReview
+selfsubjectrulesreviews                        authorization.k8s.io/v1                false        SelfSubjectRulesReview
+subjectaccessreviews                           authorization.k8s.io/v1                false        SubjectAccessReview
+certificatesigningrequests        csr          certificates.k8s.io/v1                 false        CertificateSigningRequest
+flowschemas                                    flowcontrol.apiserver.k8s.io/v1beta2   false        FlowSchema
+prioritylevelconfigurations                    flowcontrol.apiserver.k8s.io/v1beta2   false        PriorityLevelConfiguration
+ingressclasses                                 networking.k8s.io/v1                   false        IngressClass
+runtimeclasses                                 node.k8s.io/v1                         false        RuntimeClass
+podsecuritypolicies               psp          policy/v1beta1                         false        PodSecurityPolicy
+clusterrolebindings                            rbac.authorization.k8s.io/v1           false        ClusterRoleBinding
+clusterroles                                   rbac.authorization.k8s.io/v1           false        ClusterRole
+priorityclasses                   pc           scheduling.k8s.io/v1                   false        PriorityClass
+csidrivers                                     storage.k8s.io/v1                      false        CSIDriver
+csinodes                                       storage.k8s.io/v1                      false        CSINode
+storageclasses                    sc           storage.k8s.io/v1                      false        StorageClass
+volumeattachments                              storage.k8s.io/v1                      false        VolumeAttachment
+----
+
+==== Namespace por defecto
+
+Se utiliza la opción global `--namespace` para indicar a `kubectl` el namespace
+sobre el que queremos actuar.  Podemos especificar el namespace por defecto
+sobre el que queremos actuar en el contexto actual haciendo `kubectl config
+set-context --current --namespace=<namespace>`.
+
+==== kubectl create namespace
+
+Permite crear un namespace desde la línea de comandos, sin necesidad de
+utilizar un archivo YAML o JSON:
+
+[source,console]
+----
+$ kubectl create namespace blas
+namespace/blas created
+
+$ kubectl config set-context --current --namespace=blas
+Context "kind-k8s" modified.
+
+$ kubectl get pods
+No resources found in blas namespace.
+----
+
+=== Pods
+
+[[kubectl_attach,`kubectl attach`]]
+==== kubectl attach (POD | TYPE/NAME) -c CONTAINER [options]
+
+Conecta los `stdout` y `stderr` del terminal actual con uno de los contenedores
+de un pod en ejecución.  Se puede especificar el contenedor con la opción
+`--container` (si no se especifica ninguno, se elige el que tenga el nombre
+contenido en la anotación `kubectl.kubernetes.io/default-container` del pod, o
+el primer contenedor del pod si esa anotación no está definida).
+
+La forma de interrumpir la conexión dependerá del _runtime_ de contenedores que
+estemos usando, pero normalmente se hace pulsando `Ctrl-P`+`Ctrl-Q`, aunque
+suele ser configurable.
+
+Por defecto *no* conecta la entrada estándar, pero puede hacerse con la opción
+`--stdin`, con la que podemos usar además `--tty` para indicar que queremos que
+funcione en modo interactivo, como una terminal, para poder pasar las señales
+de control generadas con el teclado.
+
+[[kubectl_exec,`kubectl exec`]]
+==== kubectl exec (POD | TYPE/NAME) [-c CONTAINER] [flags] -- COMMAND [args...]
+
+Ejecuta una orden en uno de los contenedores de un pod.  Como ocurre con
+<<kubectl_attach>>, solo conecta las corrientes `stdout` y `stderr` del
+terminal a la orden, a menos que se ejecute con la opción `--stdin` y,
+opcionalmente, con `--tty` si queremos conectar la terminal actual.
+
+La elección del contenedor donde se ejecuta la orden se hace igual que con
+<<kubectl_attach>>.
+
+[[kubectl_logs,`kubectl logs`]]
+==== kubectl logs [-f] [-p] (POD | TYPE/NAME) [-c CONTAINER] [options]
+
+Muestra los registros de uno de los contenedores de un pod o del recurso que se
+especifique.
+
+Con la opción `--all-containers=true`, podemos ver los registros de todos los
+contenedores de un pod.
+
+Con `-f`, el proceso seguirá mostrando los registros a medida que se vayan
+generando.
+
+Con `-p`, podemos ver los registros de la instancia previa del contenedor, si
+es que hubo una.
+
+Con `-l`, podemos elegir los contenedores utilizando seleccionadores de
+igualdad (ver <<seleccionadores>>).
+
+Con `--since`, podemos especificar que queremos ver los registros desde el
+tiempo relativo que especifiquemos (p. ej, `--since=10m` para ver los de los
+útlimos 10 minutos).
+
+[[kubectl_top,`kubectl top`]]
+==== kubectl top (node | pod) [NAME | -l label]
+
+Muestra el uso de los recursos de un nodo o de un pod.  Solo funciona si
+tenemos corriendo en el cluster la API de métricas proporcionada por
+`metrics-server`, que se puede desplegar así:
+
+[source,console]
+----
+$ kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+serviceaccount/metrics-server created
+clusterrole.rbac.authorization.k8s.io/system:aggregated-metrics-reader created
+clusterrole.rbac.authorization.k8s.io/system:metrics-server created
+rolebinding.rbac.authorization.k8s.io/metrics-server-auth-reader created
+clusterrolebinding.rbac.authorization.k8s.io/metrics-server:system:auth-delegator created
+clusterrolebinding.rbac.authorization.k8s.io/system:metrics-server created
+service/metrics-server created
+deployment.apps/metrics-server created
+apiservice.apiregistration.k8s.io/v1beta1.metrics.k8s.io created
+----
+
+WARNING: Después de desplegarlo, no consigo que el pod aparezca listo (la
+comprobación devuelve un error 500), y no funciona:
+
+[source,console]
+----
+$ kubectl top node
+Error from server (ServiceUnavailable): the server is currently unable to handle the request (get nodes.metrics.k8s.io)
+
+$ kubectl get pods -n kube-system
+NAME                                        READY   STATUS    RESTARTS         AGE
+coredns-6d4b75cb6d-djsz9                    1/1     Running   0                12d
+coredns-6d4b75cb6d-hk54n                    1/1     Running   0                12d
+etcd-k8s-control-plane                      1/1     Running   0                12d
+kindnet-j4c4s                               1/1     Running   0                12d
+kube-apiserver-k8s-control-plane            1/1     Running   0                12d
+kube-controller-manager-k8s-control-plane   1/1     Running   17 (7d14h ago)   12d
+kube-proxy-v258n                            1/1     Running   0                12d
+kube-scheduler-k8s-control-plane            1/1     Running   15 (7d14h ago)   12d
+metrics-server-678f4bf65b-77t8p             0/1     Running   0                30m
+
+$ kubectl describe pods -n kube-system metrics-server-678f4bf65b-77t8p
+Name:                 metrics-server-678f4bf65b-77t8p
+Namespace:            kube-system
+Priority:             2000000000
+Priority Class Name:  system-cluster-critical
+Node:                 k8s-control-plane/10.89.0.2
+Start Time:           Wed, 08 Jun 2022 09:53:58 +0200
+Labels:               k8s-app=metrics-server
+                      pod-template-hash=678f4bf65b
+Annotations:          <none>
+Status:               Running
+IP:                   10.244.0.9
+IPs:
+  IP:           10.244.0.9
+Controlled By:  ReplicaSet/metrics-server-678f4bf65b
+Containers:
+  metrics-server:
+    Container ID:  containerd://e73e2c3aa80447234e9b31ab4bee19fb36ab2af01eb6378fd436acc2c5c5af0c
+    Image:         k8s.gcr.io/metrics-server/metrics-server:v0.6.1
+    Image ID:      k8s.gcr.io/metrics-server/metrics-server@sha256:5ddc6458eb95f5c70bd13fdab90cbd7d6ad1066e5b528ad1dcb28b76c5fb2f00
+    Port:          4443/TCP
+    Host Port:     0/TCP
+    Args:
+      --cert-dir=/tmp
+      --secure-port=4443
+      --kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname
+      --kubelet-use-node-status-port
+      --metric-resolution=15s
+    State:          Running
+      Started:      Wed, 08 Jun 2022 09:53:59 +0200
+    Ready:          False
+    Restart Count:  0
+    Requests:
+      cpu:        100m
+      memory:     200Mi
+    Liveness:     http-get https://:https/livez delay=0s timeout=1s period=10s #success=1 #failure=3
+    Readiness:    http-get https://:https/readyz delay=20s timeout=1s period=10s #success=1 #failure=3
+    Environment:  <none>
+    Mounts:
+      /tmp from tmp-dir (rw)
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-t2z2m (ro)
+Conditions:
+  Type              Status
+  Initialized       True 
+  Ready             False 
+  ContainersReady   False 
+  PodScheduled      True 
+Volumes:
+  tmp-dir:
+    Type:       EmptyDir (a temporary directory that shares a pod's lifetime)
+    Medium:     
+    SizeLimit:  <unset>
+  kube-api-access-t2z2m:
+    Type:                    Projected (a volume that contains injected data from multiple sources)
+    TokenExpirationSeconds:  3607
+    ConfigMapName:           kube-root-ca.crt
+    ConfigMapOptional:       <nil>
+    DownwardAPI:             true
+QoS Class:                   Burstable
+Node-Selectors:              kubernetes.io/os=linux
+Tolerations:                 node.kubernetes.io/not-ready:NoExecute op=Exists for 300s
+                             node.kubernetes.io/unreachable:NoExecute op=Exists for 300s
+Events:
+  Type     Reason     Age                  From               Message
+  ----     ------     ----                 ----               -------
+  Normal   Scheduled  31m                  default-scheduler  Successfully assigned kube-system/metrics-server-678f4bf65b-77t8p to k8s-control-plane
+  Normal   Pulled     31m                  kubelet            Container image "k8s.gcr.io/metrics-server/metrics-server:v0.6.1" already present on machine
+  Normal   Created    31m                  kubelet            Created container metrics-server
+  Normal   Started    31m                  kubelet            Started container metrics-server
+  Warning  Unhealthy  73s (x202 over 30m)  kubelet            Readiness probe failed: HTTP probe failed with statuscode: 500
+----
+
+
+=== Contextos
+
+La información de la configuración de `kubectl` se agrupa en _contextos_ con
+nombre.  `kubectl` permite consultar el contexto actual y cambiar de contexto.
+
+==== kubectl config current-context
+
+Muestra la configuración actual del cliente `kubectl`, como el cluster al que
+se conectará y el contexto actual.  El archivo de configuración se guarda en
+`~/.kube/config`.
+
+==== kubectl config get-contexts <contexto>
+
+Muestra los contextos disponibles en la configuración, o la información de uno
+concreto:
+
+[source,console]
+----
+$ kubectl config get-contexts
+CURRENT   NAME       CLUSTER    AUTHINFO   NAMESPACE
+*         kind-k8s   kind-k8s   kind-k8s
+
+$ kubectl config get-contexts kind-k8s
+CURRENT   NAME       CLUSTER    AUTHINFO   NAMESPACE
+*         kind-k8s   kind-k8s   kind-k8s
+----
+
+==== kubectl config use-context <contexto>
+
+Alias: `kubectl config use`.
+
+Cambia el contexto actual.
+
+==== kubectl config set-context <contexto>
+
+Modifica un contexto:
+
+
+[source,console]
+----
+$ kubectl config set-context kind-k8s --namespace=blas
+Context "kind-k8s" modified.
+----
+
+== Para saber más
+
+* https://kubernetes.io/docs/home/[Documentación oficial de Kubernetes].
+
+== Glosario
+
+kubeconfig:: Archivo de configuración de `kubectl`, generalmente ubicado en
+`~/.kube/config`.
+
+[[label,_label_]]
+label:: Las etiquetas son parejas de clave/valor que se asignan a los objetos
+de K8s, y se pueden utilizar en los seleccionadores para hacer referencia a los
+objetos que tengan determinadas etiquetas.
+
+[[pod,pod]]
+pod:: Unidad mínima de proceso de Kubernetes, consistente en un entorno para
+ejecutar contenedores donde comparten volúmenes, _namespaces_ y _cgroups_.  El
+contenido de un pod se lanza en un único nodo, y se gestiona como un todo.
+Todos los contenedores de un pod comparten la dirección IP 127.0.0.1 y la
+pueden usar para comunicarse entre ellos.
+
+[[selector,_selector_]]
+selector:: Filtros que utilizan etiquetas para elegir los objetos a los que
+aplican.  Por ejemplo, se puede utilizar `nodeSelector` en la definición de un
+pod para indicar que solo deben ejecutarse en los nodos que tengan las
+etiquetas indicadas.
