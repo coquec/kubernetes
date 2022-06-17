@@ -163,7 +163,7 @@ $ minikube start --kubernetes-version=latest --driver=docker --nodes=3
 👍  Starting control plane node minikube in cluster minikube
 🚜  Pulling base image ...
 💾  Downloading Kubernetes v1.23.4-rc.0 preload ...
-    > preloaded-images-k8s-v17-v1...: 505.63 MiB / 505.63 MiB  100.00% 10.88 Mi
+    > preloaded-images-k8s-v17-v1...: 505.63 MiB / 505.63 MiB  100.00% 10.77 Mi
 🔥  Creating docker container (CPUs=2, Memory=2200MB) ...
 🐳  Preparing Kubernetes v1.23.4-rc.0 on Docker 20.10.12 ...
     ▪ kubelet.housekeeping-interval=5m
@@ -188,24 +188,13 @@ $ minikube start --kubernetes-version=latest --driver=docker --nodes=3
 👍  Starting worker node minikube-m03 in cluster minikube
 🚜  Pulling base image ...
 🔥  Creating docker container (CPUs=2, Memory=2200MB) ...
-
-🧯  Docker is nearly out of disk space, which may cause deployments to fail! (86% of capacity)
-💡  Suggestion: 
-
-    Try one or more of the following to free up space on the device:
-    
-    1. Run "docker system prune" to remove unused Docker data (optionally with "-a")
-    2. Increase the storage allocated to Docker for Desktop by clicking on:
-    Docker icon > Preferences > Resources > Disk Image Size
-    3. Run "minikube ssh -- docker system prune" if using the Docker container runtime
-🍿  Related issue: https://github.com/kubernetes/minikube/issues/9024
-
 🌐  Found network options:
     ▪ NO_PROXY=192.168.49.2,192.168.49.3
 🐳  Preparing Kubernetes v1.23.4-rc.0 on Docker 20.10.12 ...
     ▪ env NO_PROXY=192.168.49.2
     ▪ env NO_PROXY=192.168.49.2,192.168.49.3
 🔎  Verifying Kubernetes components...
+💡  kubectl not found. If you need it, try: 'minikube kubectl -- get pods -A'
 🏄  Done! kubectl is now configured to use "minikube" cluster and "default" namespace by default
 ----
 
@@ -402,6 +391,384 @@ selector:
 Este tipo de seleccionadores admite los operadores `In`, `NotIn`, `Exists`,
 `DoesNotExist`, `Gt` y `Lt`.
 
+=== Control de los trabajos
+
+La misión principal de K8s es asegurarse de los trabajos se ejecutan
+adecuadamente, monitorizándolos y asignándoles los recursos que necesiten.
+Para ello disponemos de _workload resources_, recursos que gestionan los
+trabajos, como _Deployments_, _ReplicaSets_, _Jobs_...
+
+NOTE: Aunque solo queramos tener una instancia de un pod, en vez de lanzarla
+manualmente es mejor utilizar siempre algún tipo de controlador para garantizar
+su funcionamiento.
+
+[[replicasets,_replica sets_]]
+==== Replica Sets
+
+Los _replica sets_ (`ReplicaSet`), garantizan que hay un número determinado de
+réplicas de un pod funcionando (levantados y disponibles), creando los que
+falten o eliminando los que sobren.  Los pods se sustituyen automáticamente si
+fallan, se eliminan o terminan, utilizando para ello la plantilla del pod
+especificada en su definición.  Se tiene en cuenta el estado de los pods en
+todos los nodos.
+
+NOTE: Aunque podemos utilizar directamente los _replica sets_, se mejor
+utilizar <<deployments>>, que son conceptos de más alto nivel que utilizan
+_replica sets_ y proporcionan más funcionalidades.
+
+El siguiente ejemplo define un `ReplicaSet` con tres pods de nginx:
+
+.rs-nginx.yaml
+[source,yaml]
+----
+---
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: nginx-rs
+  labels:
+    app: app-nginx
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: app-nginx
+  template:
+    metadata:
+      name: nginx
+      labels:
+        app: app-nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx
+        ports:
+        - containerPort: 80
+----
+
+[source,console]
+----
+$ kubectl apply -f rs-nginx.yaml
+replicaset.apps/nginx-rs created
+----
+
+Estos son los eventos que se producen al ejecutar la orden anterior:
+
+[source,console]
+----
+$ kubectl get events --watch
+1s          Normal    Scheduled          pod/nginx-rs-t46pz    Successfully assigned blas/nginx-rs-t46pz to minikube-m03
+1s          Normal    SuccessfulCreate   replicaset/nginx-rs   Created pod: nginx-rs-t46pz
+1s          Normal    SuccessfulCreate   replicaset/nginx-rs   Created pod: nginx-rs-z87k5
+0s          Normal    Scheduled          pod/nginx-rs-58npq    Successfully assigned blas/nginx-rs-58npq to minikube
+0s          Normal    SuccessfulCreate   replicaset/nginx-rs   Created pod: nginx-rs-58npq
+0s          Normal    Scheduled          pod/nginx-rs-z87k5    Successfully assigned blas/nginx-rs-z87k5 to minikube-m02
+0s          Normal    Pulling            pod/nginx-rs-z87k5    Pulling image "nginx"
+0s          Normal    Pulling            pod/nginx-rs-58npq    Pulling image "nginx"
+0s          Normal    Pulling            pod/nginx-rs-t46pz    Pulling image "nginx"
+0s          Normal    Pulled             pod/nginx-rs-z87k5    Successfully pulled image "nginx" in 1.354562976s
+0s          Normal    Pulled             pod/nginx-rs-58npq    Successfully pulled image "nginx" in 1.317435738s
+0s          Normal    Created            pod/nginx-rs-z87k5    Created container nginx
+0s          Normal    Created            pod/nginx-rs-58npq    Created container nginx
+0s          Normal    Pulled             pod/nginx-rs-t46pz    Successfully pulled image "nginx" in 1.379200875s
+0s          Normal    Created            pod/nginx-rs-t46pz    Created container nginx
+0s          Normal    Started            pod/nginx-rs-58npq    Started container nginx
+0s          Normal    Started            pod/nginx-rs-z87k5    Started container nginx
+0s          Normal    Started            pod/nginx-rs-t46pz    Started container nginx
+----
+
+
+[source,console]
+----
+$ kubectl get rs
+NAME       DESIRED   CURRENT   READY   AGE
+nginx-rs   3         3         3       76s
+----
+
+[source,console]
+----
+$ kubectl describe rs nginx-rs
+Name:         nginx-rs
+Namespace:    blas
+Selector:     app=app-nginx
+Labels:       app=app-nginx
+Annotations:  <none>
+Replicas:     3 current / 3 desired
+Pods Status:  3 Running / 0 Waiting / 0 Succeeded / 0 Failed
+Pod Template:
+  Labels:  app=app-nginx
+  Containers:
+   nginx:
+    Image:        nginx
+    Port:         80/TCP
+    Host Port:    0/TCP
+    Environment:  <none>
+    Mounts:       <none>
+  Volumes:        <none>
+Events:
+  Type    Reason            Age   From                   Message
+  ----    ------            ----  ----                   -------
+  Normal  SuccessfulCreate  93s   replicaset-controller  Created pod: nginx-rs-7gprq
+  Normal  SuccessfulCreate  93s   replicaset-controller  Created pod: nginx-rs-2hlpr
+  Normal  SuccessfulCreate  92s   replicaset-controller  Created pod: nginx-rs-ltzt7
+----
+
+[source,console]
+----
+$ kubectl get pods
+nginx-rs-2hlpr   1/1     Running   0          2m
+nginx-rs-7gprq   1/1     Running   0          2m
+nginx-rs-ltzt7   1/1     Running   0          2m
+----
+
+El seleccionador `matchLabels` del _replica set_ identifica los pods que serán
+controlados por él.  Un _replica set_ está enlazado con sus pods mediante el
+campo `metadata.ownerReferences` de estos, que especifica qué recurso es el
+propietario de un objeto:
+
+[source,console]
+----
+$ kubectl get pods nginx-rs-2hlpr -o yaml
+kubectl get pods nginx-rs-6wxmb -o yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  creationTimestamp: "2022-06-17T12:10:39Z"
+  generateName: nginx-rs-
+  labels:
+    app: app-nginx
+  name: nginx-rs-6wxmb
+  namespace: blas
+  ownerReferences:
+  - apiVersion: apps/v1
+    blockOwnerDeletion: true
+    controller: true
+    kind: ReplicaSet
+    name: nginx-rs
+    uid: 0ca66e0f-5951-47dd-a1d3-b4c22a1db7b6
+  resourceVersion: "20754"
+  uid: 279d249e-668a-4968-80fd-01a45942f805
+...
+...
+----
+
+Si un nuevo pod cumple con el seleccionador de un _replica set_, será adquirido
+por él, siempre que no tenga ya un propietario o su propietario no sea un
+controlador.  Podemos ver esto con el siguiente ejemplo, donde creamos un nuevo
+pod manualmente con la etiqueta del seleccionador usado en nuestro _replica
+set_.  El pod se crea, pero se destruye inmediatamente porque ya tenemos los
+tres pods del _replica set_ funcionando:
+
+.rs-new-pod.yaml
+[source,source]
+----
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: new-pod
+  labels:
+    app: app-nginx
+spec:
+  containers:
+  - name: new-nginx
+    image: nginx
+    ports:
+    - containerPort: 80
+----
+
+[source,console]
+----
+$ kubectl apply -f rs-new-pod.yaml
+pod/new-pod created
+----
+
+[source,console]
+----
+$ kubectl get events --watch
+0s          Normal    Scheduled          pod/new-pod           Successfully assigned blas/new-pod to minikube-m02
+0s          Normal    SuccessfulDelete   replicaset/nginx-rs   Deleted pod: new-pod
+0s          Normal    Pulling            pod/new-pod           Pulling image "nginx"
+0s          Normal    Pulled             pod/new-pod           Successfully pulled image "nginx" in 1.452625358s
+0s          Normal    Created            pod/new-pod           Created container new-nginx
+0s          Normal    Started            pod/new-pod           Started container new-nginx
+0s          Normal    Killing            pod/new-pod           Stopping container new-nginx 
+----
+
+[source,console]
+----
+$ kubectl get pods
+NAME             READY   STATUS    RESTARTS   AGE
+nginx-rs-2hlpr   1/1     Running   0          8m14s
+nginx-rs-7gprq   1/1     Running   0          8m14s
+nginx-rs-ltzt7   1/1     Running   0          8m14s
+----
+
+Si lo hacemos al revés, primero creando el pod y luego el _replica set_, pasa
+lo contrario, manteniéndose el pod que creamos manualmente y añadiéndose otros
+dos:
+
+[source,console]
+----
+$ kubectl apply -f rs-new-pod.yaml
+pod/new-pod created
+----
+
+[source,console]
+----
+$ kubectl get pods
+NAME      READY   STATUS    RESTARTS   AGE
+new-pod   1/1     Running   0          9s
+----
+
+[source,console]
+----
+$ kubectl apply -f rs-nginx.yaml
+replicaset.apps/nginx-rs created
+----
+
+[source,console]
+----
+$ kubectl get pods
+NAME             READY   STATUS    RESTARTS   AGE
+new-pod          1/1     Running   0          35s
+nginx-rs-9pg7q   1/1     Running   0          10s
+nginx-rs-scjhn   1/1     Running   0          10s
+----
+
+Podemos comprobar que el pod creado manualmente ahora está controlado por el
+_replica set_:
+
+[source,console]
+----
+$ kubectl describe pod/new-pod
+Name:         new-pod
+Namespace:    blas
+Priority:     0
+Node:         minikube-m03/192.168.49.4
+Start Time:   Fri, 17 Jun 2022 14:03:13 +0200
+Labels:       app=app-nginx
+Annotations:  <none>
+Status:       Running
+IP:           10.244.2.10
+IPs:
+  IP:           10.244.2.10
+Controlled By:  ReplicaSet/nginx-rs
+...
+...
+----
+
+Si eliminamos cualquiera de los pods controlados por el _replica set_, se
+sustituye por uno nuevo inmediatamente:
+
+[source,console]
+----
+$ kubectl delete pod new-pod
+pod "new-pod" deleted
+----
+
+[source,console]
+----
+$ kubectl get pods
+NAME             READY   STATUS    RESTARTS   AGE
+nginx-rs-6wxmb   1/1     Running   0          8s
+nginx-rs-9pg7q   1/1     Running   0          7m9s
+nginx-rs-scjhn   1/1     Running   0          7m9s
+----
+
+Al eliminar un _replica set_, se cambia el número de objetos controlados por él
+a 0 para finalizarlos, y después se elimina el propio _replica set_:
+
+[source,console]
+----
+$ kubectl delete rc/nginx
+replicationcontroller "nginx" deleted
+
+$ kubectl get pods
+No resources found in blas namespace.
+----
+
+[[deployments,_deployments_]]
+==== Deployments
+
+==== ReplicationControllers
+
+Los _replication controllers_ (`ReplicationController`), tienen una función
+similar a las de los <<replicasets>>.  En la actualidad es preferible utilizar
+<<deployments>> o <<replicasets>> en su lugar.
+
+La siguiente configuración garantiza que hay tres instancias de `nginx`
+corriendo en nuestro cluster:
+
+.rc-ngix.yaml
+[source,yaml]
+----
+apiVersion: v1
+kind: ReplicationController
+metadata:
+  name: nginx
+spec:
+  replicas: 3
+  selector:
+    app: nginx
+  template:
+    metadata:
+      name: nginx
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx
+        ports:
+        - containerPort: 80
+----
+
+[source,console]
+----
+$ kubectl apply -f rc-nginx.yaml
+replicationcontroller/nginx created
+
+$ kubectl get replicationcontroller
+NAME    DESIRED   CURRENT   READY   AGE
+nginx   3         3         0       19s
+
+$ kubectl get rc
+NAME    DESIRED   CURRENT   READY   AGE
+nginx   3         3         0       23s
+
+$ kubectl describe rc/nginx
+Name:         nginx
+Namespace:    blas
+Selector:     app=nginx
+Labels:       app=nginx
+Annotations:  <none>
+Replicas:     3 current / 3 desired
+Pods Status:  3 Running / 0 Waiting / 0 Succeeded / 0 Failed
+Pod Template:
+  Labels:  app=nginx
+  Containers:
+   nginx:
+    Image:        nginx
+    Port:         80/TCP
+    Host Port:    0/TCP
+    Environment:  <none>
+    Mounts:       <none>
+  Volumes:        <none>
+Events:
+  Type    Reason            Age    From                    Message
+  ----    ------            ----   ----                    -------
+  Normal  SuccessfulCreate  2m36s  replication-controller  Created pod: nginx-6w895
+  Normal  SuccessfulCreate  2m36s  replication-controller  Created pod: nginx-m6ltm
+  Normal  SuccessfulCreate  2m36s  replication-controller  Created pod: nginx-9t42r
+
+$ kubectl get pods
+NAME          READY   STATUS    RESTARTS   AGE
+nginx-6w895   1/1     Running   0          67s
+nginx-9t42r   1/1     Running   0          67s
+nginx-m6ltm   1/1     Running   0          67s
+----
+
 == CLI de kubectl
 
 `kubectl` es el cliente más habitual para trabajar con la API de K8s.  Funciona
@@ -555,118 +922,121 @@ Muestra los detalles de un recurso o de un grupo de recursos:
 
 [source,console]
 ----
-$ kubectl describe node k8s-control-plane
-Name:               k8s-control-plane
-Roles:              control-plane
+$ kubectl describe node minikube
+Name:               minikube
+Roles:              control-plane,master
 Labels:             beta.kubernetes.io/arch=amd64
                     beta.kubernetes.io/os=linux
                     kubernetes.io/arch=amd64
-                    kubernetes.io/hostname=k8s-control-plane
+                    kubernetes.io/hostname=minikube
                     kubernetes.io/os=linux
+                    minikube.k8s.io/commit=362d5fdc0a3dbee389b3d3f1034e8023e72bd3a7
+                    minikube.k8s.io/name=minikube
+                    minikube.k8s.io/primary=true
+                    minikube.k8s.io/updated_at=2022_06_16T16_57_10_0700
+                    minikube.k8s.io/version=v1.25.2
                     node-role.kubernetes.io/control-plane=
+                    node-role.kubernetes.io/master=
                     node.kubernetes.io/exclude-from-external-load-balancers=
-Annotations:        kubeadm.alpha.kubernetes.io/cri-socket: unix:///run/containerd/containerd.sock
+Annotations:        kubeadm.alpha.kubernetes.io/cri-socket: /var/run/dockershim.sock
                     node.alpha.kubernetes.io/ttl: 0
                     volumes.kubernetes.io/controller-managed-attach-detach: true
-CreationTimestamp:  Thu, 26 May 2022 14:36:42 +0200
+CreationTimestamp:  Thu, 16 Jun 2022 16:57:05 +0200
 Taints:             <none>
 Unschedulable:      false
 Lease:
-  HolderIdentity:  k8s-control-plane
+  HolderIdentity:  minikube
   AcquireTime:     <unset>
-  RenewTime:       Tue, 31 May 2022 13:13:46 +0200
+  RenewTime:       Fri, 17 Jun 2022 09:39:46 +0200
 Conditions:
   Type             Status  LastHeartbeatTime                 LastTransitionTime                Reason                       Message
   ----             ------  -----------------                 ------------------                ------                       -------
-  MemoryPressure   False   Tue, 31 May 2022 13:11:55 +0200   Thu, 26 May 2022 14:36:39 +0200   KubeletHasSufficientMemory   kubelet has sufficient memory available
-  DiskPressure     False   Tue, 31 May 2022 13:11:55 +0200   Thu, 26 May 2022 14:36:39 +0200   KubeletHasNoDiskPressure     kubelet has no disk pressure
-  PIDPressure      False   Tue, 31 May 2022 13:11:55 +0200   Thu, 26 May 2022 14:36:39 +0200   KubeletHasSufficientPID      kubelet has sufficient PID available
-  Ready            True    Tue, 31 May 2022 13:11:55 +0200   Thu, 26 May 2022 14:37:18 +0200   KubeletReady                 kubelet is posting ready status
+  MemoryPressure   False   Fri, 17 Jun 2022 09:39:44 +0200   Thu, 16 Jun 2022 16:57:03 +0200   KubeletHasSufficientMemory   kubelet has sufficient memory available
+  DiskPressure     False   Fri, 17 Jun 2022 09:39:44 +0200   Thu, 16 Jun 2022 16:57:03 +0200   KubeletHasNoDiskPressure     kubelet has no disk pressure
+  PIDPressure      False   Fri, 17 Jun 2022 09:39:44 +0200   Thu, 16 Jun 2022 16:57:03 +0200   KubeletHasSufficientPID      kubelet has sufficient PID available
+  Ready            True    Fri, 17 Jun 2022 09:39:44 +0200   Thu, 16 Jun 2022 16:57:40 +0200   KubeletReady                 kubelet is posting ready status
 Addresses:
-  InternalIP:  10.89.0.2
-  Hostname:    k8s-control-plane
+  InternalIP:  192.168.49.2
+  Hostname:    minikube
 Capacity:
-  cpu:            4
-  hugepages-1Gi:  0
-  hugepages-2Mi:  0
-  memory:         16314336Ki
-  pods:           110
+  cpu:                4
+  ephemeral-storage:  228250020Ki
+  hugepages-1Gi:      0
+  hugepages-2Mi:      0
+  memory:             16313948Ki
+  pods:               110
 Allocatable:
-  cpu:            4
-  hugepages-1Gi:  0
-  hugepages-2Mi:  0
-  memory:         16314336Ki
-  pods:           110
+  cpu:                4
+  ephemeral-storage:  228250020Ki
+  hugepages-1Gi:      0
+  hugepages-2Mi:      0
+  memory:             16313948Ki
+  pods:               110
 System Info:
-  Machine ID:                 07512f26531849baaff20c4813e9e619
-  System UUID:                0933fcdc-ed26-4e74-92c8-a184f83f8410
-  Boot ID:                    1d5b5647-f3f1-46dc-9418-e4d8485e262a
-  Kernel Version:             5.17.0-1-amd64
-  OS Image:                   Ubuntu 21.10
+  Machine ID:                 b6a262faae404a5db719705fd34b5c8b
+  System UUID:                b37357ed-52bd-4e93-81cd-d9d47eff6cd3
+  Boot ID:                    b7cc6ccb-cb87-4399-b045-b6f3a8511c4c
+  Kernel Version:             5.18.0-1-amd64
+  OS Image:                   Ubuntu 20.04.2 LTS
   Operating System:           linux
   Architecture:               amd64
-  Container Runtime Version:  containerd://1.6.4
-  Kubelet Version:            v1.24.0
-  Kube-Proxy Version:         v1.24.0
+  Container Runtime Version:  docker://20.10.12
+  Kubelet Version:            v1.23.4-rc.0
+  Kube-Proxy Version:         v1.23.4-rc.0
 PodCIDR:                      10.244.0.0/24
 PodCIDRs:                     10.244.0.0/24
-ProviderID:                   kind://podman/k8s/k8s-control-plane
-Non-terminated Pods:          (9 in total)
-  Namespace                   Name                                         CPU Requests  CPU Limits  Memory Requests  Memory Limits  Age
-  ---------                   ----                                         ------------  ----------  ---------------  -------------  ---
-  kube-system                 coredns-6d4b75cb6d-djsz9                     100m (2%)     0 (0%)      70Mi (0%)        170Mi (1%)     4d22h
-  kube-system                 coredns-6d4b75cb6d-hk54n                     100m (2%)     0 (0%)      70Mi (0%)        170Mi (1%)     4d22h
-  kube-system                 etcd-k8s-control-plane                       100m (2%)     0 (0%)      100Mi (0%)       0 (0%)         4d22h
-  kube-system                 kindnet-j4c4s                                100m (2%)     100m (2%)   50Mi (0%)        50Mi (0%)      4d22h
-  kube-system                 kube-apiserver-k8s-control-plane             250m (6%)     0 (0%)      0 (0%)           0 (0%)         4d22h
-  kube-system                 kube-controller-manager-k8s-control-plane    200m (5%)     0 (0%)      0 (0%)           0 (0%)         4d22h
-  kube-system                 kube-proxy-v258n                             0 (0%)        0 (0%)      0 (0%)           0 (0%)         4d22h
-  kube-system                 kube-scheduler-k8s-control-plane             100m (2%)     0 (0%)      0 (0%)           0 (0%)         4d22h
-  local-path-storage          local-path-provisioner-9cd9bd544-hvlm8       0 (0%)        0 (0%)      0 (0%)           0 (0%)         4d22h
+Non-terminated Pods:          (8 in total)
+  Namespace                   Name                                CPU Requests  CPU Limits  Memory Requests  Memory Limits  Age
+  ---------                   ----                                ------------  ----------  ---------------  -------------  ---
+  kube-system                 coredns-64897985d-xrxk5             100m (2%)     0 (0%)      70Mi (0%)        170Mi (1%)     16h
+  kube-system                 etcd-minikube                       100m (2%)     0 (0%)      100Mi (0%)       0 (0%)         16h
+  kube-system                 kindnet-mb27w                       100m (2%)     100m (2%)   50Mi (0%)        50Mi (0%)      16h
+  kube-system                 kube-apiserver-minikube             250m (6%)     0 (0%)      0 (0%)           0 (0%)         16h
+  kube-system                 kube-controller-manager-minikube    200m (5%)     0 (0%)      0 (0%)           0 (0%)         16h
+  kube-system                 kube-proxy-7bdr4                    0 (0%)        0 (0%)      0 (0%)           0 (0%)         16h
+  kube-system                 kube-scheduler-minikube             100m (2%)     0 (0%)      0 (0%)           0 (0%)         16h
+  kube-system                 storage-provisioner                 0 (0%)        0 (0%)      0 (0%)           0 (0%)         16h
 Allocated resources:
   (Total limits may be over 100 percent, i.e., overcommitted.)
   Resource           Requests    Limits
   --------           --------    ------
-  cpu                950m (23%)  100m (2%)
-  memory             290Mi (1%)  390Mi (2%)
+  cpu                850m (21%)  100m (2%)
+  memory             220Mi (1%)  220Mi (1%)
   ephemeral-storage  0 (0%)      0 (0%)
   hugepages-1Gi      0 (0%)      0 (0%)
   hugepages-2Mi      0 (0%)      0 (0%)
-Events:
-  Type    Reason          Age   From             Message
-  ----    ------          ----  ----             -------
-  Normal  RegisteredNode  55m   node-controller  Node k8s-control-plane event: Registered Node k8s-control-plane in Controller
+Events:              <none>
 ----
 
 [source,console]
 ----
-$ kubectl describe pod coredns-6d4b75cb6d-djsz9 -n kube-system
-Name:                 coredns-6d4b75cb6d-djsz9
+$ kubectl describe pod coredns-64897985d-xrxk5 -n kube-system
+Name:                 coredns-64897985d-xrxk5
 Namespace:            kube-system
 Priority:             2000000000
 Priority Class Name:  system-cluster-critical
-Node:                 k8s-control-plane/10.89.0.2
-Start Time:           Thu, 26 May 2022 14:37:18 +0200
+Node:                 minikube/192.168.49.2
+Start Time:           Thu, 16 Jun 2022 16:57:40 +0200
 Labels:               k8s-app=kube-dns
-                      pod-template-hash=6d4b75cb6d
+                      pod-template-hash=64897985d
 Annotations:          <none>
 Status:               Running
-IP:                   10.244.0.3
+IP:                   10.244.0.2
 IPs:
-  IP:           10.244.0.3
-Controlled By:  ReplicaSet/coredns-6d4b75cb6d
+  IP:           10.244.0.2
+Controlled By:  ReplicaSet/coredns-64897985d
 Containers:
   coredns:
-    Container ID:  containerd://052d77f0d5db7fdebbdcec64b99272e06837e07e056abd61ad0e0be096188bfd
+    Container ID:  docker://594e4896eef7d215bd27cc94c092441b3e7ef6b74f96eb9a5b51697d229d50ec
     Image:         k8s.gcr.io/coredns/coredns:v1.8.6
-    Image ID:      sha256:a4ca41631cc7ac19ce1be3ebf0314ac5f47af7c711f17066006db82ee3b75b03
+    Image ID:      docker-pullable://k8s.gcr.io/coredns/coredns@sha256:5b6ec0d6de9baaf3e92d0f66cd96a25b9edbce8716f5f15dcd1a616b3abd590e
     Ports:         53/UDP, 53/TCP, 9153/TCP
     Host Ports:    0/UDP, 0/TCP, 0/TCP
     Args:
       -conf
       /etc/coredns/Corefile
     State:          Running
-      Started:      Thu, 26 May 2022 14:37:25 +0200
+      Started:      Thu, 16 Jun 2022 16:57:46 +0200
     Ready:          True
     Restart Count:  0
     Limits:
@@ -679,7 +1049,7 @@ Containers:
     Environment:  <none>
     Mounts:
       /etc/coredns from config-volume (ro)
-      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-rvff5 (ro)
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-zvnwb (ro)
 Conditions:
   Type              Status
   Initialized       True 
@@ -691,7 +1061,7 @@ Volumes:
     Type:      ConfigMap (a volume populated by a ConfigMap)
     Name:      coredns
     Optional:  false
-  kube-api-access-rvff5:
+  kube-api-access-zvnwb:
     Type:                    Projected (a volume that contains injected data from multiple sources)
     TokenExpirationSeconds:  3607
     ConfigMapName:           kube-root-ca.crt
@@ -717,53 +1087,61 @@ Devuelve distinta información sobre el cluster, como los nodos, los
 [source,console]
 ----
 $ kubectl get nodes -o wide
-NAME                STATUS   ROLES           AGE    VERSION   INTERNAL-IP   EXTERNAL-IP   OS-IMAGE       KERNEL-VERSION   CONTAINER-RUNTIME
-k8s-control-plane   Ready    control-plane   4d2h   v1.24.0   10.89.0.2     <none>        Ubuntu 21.10   5.17.0-1-amd64   containerd://1.6.4
+
+NAME           STATUS   ROLES                  AGE   VERSION        INTERNAL-IP    EXTERNAL-IP   OS-IMAGE             KERNEL-VERSION   CONTAINER-RUNTIME
+minikube       Ready    control-plane,master   16h   v1.23.4-rc.0   192.168.49.2   <none>        Ubuntu 20.04.2 LTS   5.18.0-1-amd64   docker://20.10.12
+minikube-m02   Ready    <none>                 16h   v1.23.4-rc.0   192.168.49.3   <none>        Ubuntu 20.04.2 LTS   5.18.0-1-amd64   docker://20.10.12
+minikube-m03   Ready    <none>                 16h   v1.23.4-rc.0   192.168.49.4   <none>        Ubuntu 20.04.2 LTS   5.18.0-1-amd64   docker://20.10.12
 ----
 
 [source,console]
 ----
 $ kubectl get pods --all-namespaces
-NAMESPACE            NAME                                        READY   STATUS    RESTARTS        AGE
-kube-system          coredns-6d4b75cb6d-djsz9                    1/1     Running   0               4d2h
-kube-system          coredns-6d4b75cb6d-hk54n                    1/1     Running   0               4d2h
-kube-system          etcd-k8s-control-plane                      1/1     Running   0               4d2h
-kube-system          kindnet-j4c4s                               1/1     Running   0               4d2h
-kube-system          kube-apiserver-k8s-control-plane            1/1     Running   0               4d2h
-kube-system          kube-controller-manager-k8s-control-plane   1/1     Running   2 (6h41m ago)   4d2h
-kube-system          kube-proxy-v258n                            1/1     Running   0               4d2h
-kube-system          kube-scheduler-k8s-control-plane            1/1     Running   1 (6h53m ago)   4d2h
-local-path-storage   local-path-provisioner-9cd9bd544-hvlm8      1/1     Running   0               4d2h
+NAMESPACE     NAME                               READY   STATUS    RESTARTS   AGE
+kube-system   coredns-64897985d-xrxk5            1/1     Running   0          16h
+kube-system   etcd-minikube                      1/1     Running   0          16h
+kube-system   kindnet-kmx5v                      1/1     Running   0          16h
+kube-system   kindnet-llx4l                      1/1     Running   0          16h
+kube-system   kindnet-mb27w                      1/1     Running   0          16h
+kube-system   kube-apiserver-minikube            1/1     Running   0          16h
+kube-system   kube-controller-manager-minikube   1/1     Running   0          16h
+kube-system   kube-proxy-2ldqz                   1/1     Running   0          16h
+kube-system   kube-proxy-75x8c                   1/1     Running   0          16h
+kube-system   kube-proxy-7bdr4                   1/1     Running   0          16h
+kube-system   kube-scheduler-minikube            1/1     Running   0          16h
+kube-system   storage-provisioner                1/1     Running   0          16h
 ----
 
 [source,console]
 ----
 $ kubectl get pods --all-namespaces -o wide
-NAMESPACE            NAME                                        READY   STATUS    RESTARTS        AGE    IP           NODE                NOMINATED NODE   READINESS GATES
-kube-system          coredns-6d4b75cb6d-djsz9                    1/1     Running   0               4d2h   10.244.0.3   k8s-control-plane   <none>           <none>
-kube-system          coredns-6d4b75cb6d-hk54n                    1/1     Running   0               4d2h   10.244.0.4   k8s-control-plane   <none>           <none>
-kube-system          etcd-k8s-control-plane                      1/1     Running   0               4d2h   10.89.0.2    k8s-control-plane   <none>           <none>
-kube-system          kindnet-j4c4s                               1/1     Running   0               4d2h   10.89.0.2    k8s-control-plane   <none>           <none>
-kube-system          kube-apiserver-k8s-control-plane            1/1     Running   0               4d2h   10.89.0.2    k8s-control-plane   <none>           <none>
-kube-system          kube-controller-manager-k8s-control-plane   1/1     Running   2 (6h40m ago)   4d2h   10.89.0.2    k8s-control-plane   <none>           <none>
-kube-system          kube-proxy-v258n                            1/1     Running   0               4d2h   10.89.0.2    k8s-control-plane   <none>           <none>
-kube-system          kube-scheduler-k8s-control-plane            1/1     Running   1 (6h52m ago)   4d2h   10.89.0.2    k8s-control-plane   <none>           <none>
-local-path-storage   local-path-provisioner-9cd9bd544-hvlm8      1/1     Running   0               4d2h   10.244.0.2   k8s-control-plane   <none>           <none>
+NAMESPACE     NAME                               READY   STATUS    RESTARTS   AGE   IP             NODE           NOMINATED NODE   READINESS GATES
+kube-system   coredns-64897985d-xrxk5            1/1     Running   0          16h   10.244.0.2     minikube       <none>           <none>
+kube-system   etcd-minikube                      1/1     Running   0          16h   192.168.49.2   minikube       <none>           <none>
+kube-system   kindnet-kmx5v                      1/1     Running   0          16h   192.168.49.4   minikube-m03   <none>           <none>
+kube-system   kindnet-llx4l                      1/1     Running   0          16h   192.168.49.3   minikube-m02   <none>           <none>
+kube-system   kindnet-mb27w                      1/1     Running   0          16h   192.168.49.2   minikube       <none>           <none>
+kube-system   kube-apiserver-minikube            1/1     Running   0          16h   192.168.49.2   minikube       <none>           <none>
+kube-system   kube-controller-manager-minikube   1/1     Running   0          16h   192.168.49.2   minikube       <none>           <none>
+kube-system   kube-proxy-2ldqz                   1/1     Running   0          16h   192.168.49.4   minikube-m03   <none>           <none>
+kube-system   kube-proxy-75x8c                   1/1     Running   0          16h   192.168.49.3   minikube-m02   <none>           <none>
+kube-system   kube-proxy-7bdr4                   1/1     Running   0          16h   192.168.49.2   minikube       <none>           <none>
+kube-system   kube-scheduler-minikube            1/1     Running   0          16h   192.168.49.2   minikube       <none>           <none>
+kube-system   storage-provisioner                1/1     Running   0          16h   192.168.49.2   minikube       <none>           <none>
 ----
 
 [source,console]
 ----
-$ kubectl get pod coredns-6d4b75cb6d-djsz9 -n kube-system
-NAME                       READY   STATUS    RESTARTS   AGE
-coredns-6d4b75cb6d-djsz9   1/1     Running   0          4d2h
+$ kubectl get pod coredns-64897985d-xrxk5 -n kube-system
+NAME                      READY   STATUS    RESTARTS   AGE
+coredns-64897985d-xrxk5   1/1     Running   0          16h
 ----
-
 
 [source,console]
 ----
 $ kubectl get services
 NAME         TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)   AGE
-kubernetes   ClusterIP   10.96.0.1    <none>        443/TCP   4d2h
+kubernetes   ClusterIP   10.96.0.1    <none>        443/TCP   16h
 ----
 
 Por defecto, hay algunos tipos de recursos dentro de los namespaces que no se
@@ -773,22 +1151,21 @@ para verlos todos:
 [source,console]
 ----
 $ kubectl api-resources --verbs=list --namespaced -o name | xargs -n1 kubectl get --show-kind --ignore-not-found --all-namespaces
-NAMESPACE            NAME                                           DATA   AGE
-default              configmap/kube-root-ca.crt                     1      5d2h
-kube-node-lease      configmap/kube-root-ca.crt                     1      5d2h
-kube-public          configmap/cluster-info                         1      5d2h
-kube-public          configmap/kube-root-ca.crt                     1      5d2h
-kube-system          configmap/coredns                              1      5d2h
-kube-system          configmap/extension-apiserver-authentication   6      5d2h
-kube-system          configmap/kube-proxy                           2      5d2h
-kube-system          configmap/kube-root-ca.crt                     1      5d2h
-kube-system          configmap/kubeadm-config                       1      5d2h
-kube-system          configmap/kubelet-config                       1      5d2h
-local-path-storage   configmap/kube-root-ca.crt                     1      5d2h
-local-path-storage   configmap/local-path-config                    4      5d2h
-NAMESPACE     NAME                   ENDPOINTS                                               AGE
-default       endpoints/kubernetes   10.89.0.2:6443                                          5d2h
-kube-system   endpoints/kube-dns     10.244.0.3:53,10.244.0.4:53,10.244.0.3:53 + 3 more...   5d2h
+NAMESPACE         NAME                                           DATA   AGE
+default           configmap/kube-root-ca.crt                     1      16h
+kube-node-lease   configmap/kube-root-ca.crt                     1      16h
+kube-public       configmap/cluster-info                         4      16h
+kube-public       configmap/kube-root-ca.crt                     1      16h
+kube-system       configmap/coredns                              1      16h
+kube-system       configmap/extension-apiserver-authentication   6      16h
+kube-system       configmap/kube-proxy                           2      16h
+kube-system       configmap/kube-root-ca.crt                     1      16h
+kube-system       configmap/kubeadm-config                       1      16h
+kube-system       configmap/kubelet-config-1.23                  1      16h
+NAMESPACE     NAME                                 ENDPOINTS                                     AGE
+default       endpoints/kubernetes                 192.168.49.2:8443                             16h
+kube-system   endpoints/k8s.io-minikube-hostpath   <none>                                        16h
+kube-system   endpoints/kube-dns                   10.244.0.2:53,10.244.0.2:53,10.244.0.2:9153   16h
 ...
 ...
 ----
@@ -956,7 +1333,7 @@ $ kubectl create namespace blas
 namespace/blas created
 
 $ kubectl config set-context --current --namespace=blas
-Context "kind-k8s" modified.
+Context "minikube" modified.
 
 $ kubectl get pods
 No resources found in blas namespace.
@@ -1045,37 +1422,41 @@ $ kubectl top node
 Error from server (ServiceUnavailable): the server is currently unable to handle the request (get nodes.metrics.k8s.io)
 
 $ kubectl get pods -n kube-system
-NAME                                        READY   STATUS    RESTARTS         AGE
-coredns-6d4b75cb6d-djsz9                    1/1     Running   0                12d
-coredns-6d4b75cb6d-hk54n                    1/1     Running   0                12d
-etcd-k8s-control-plane                      1/1     Running   0                12d
-kindnet-j4c4s                               1/1     Running   0                12d
-kube-apiserver-k8s-control-plane            1/1     Running   0                12d
-kube-controller-manager-k8s-control-plane   1/1     Running   17 (7d14h ago)   12d
-kube-proxy-v258n                            1/1     Running   0                12d
-kube-scheduler-k8s-control-plane            1/1     Running   15 (7d14h ago)   12d
-metrics-server-678f4bf65b-77t8p             0/1     Running   0                30m
+NAME                               READY   STATUS    RESTARTS   AGE
+coredns-64897985d-xrxk5            1/1     Running   0          17m
+etcd-minikube                      1/1     Running   0          17m
+kindnet-kmx5v                      1/1     Running   0          17m
+kindnet-llx4l                      1/1     Running   0          17m
+kindnet-mb27w                      1/1     Running   0          17m
+kube-apiserver-minikube            1/1     Running   0          17m
+kube-controller-manager-minikube   1/1     Running   0          17m
+kube-proxy-2ldqz                   1/1     Running   0          17m
+kube-proxy-75x8c                   1/1     Running   0          17m
+kube-proxy-7bdr4                   1/1     Running   0          17m
+kube-scheduler-minikube            1/1     Running   0          17m
+metrics-server-847dcc659d-hztqw    0/1     Running   0          37s
+storage-provisioner                1/1     Running   0          17m
 
-$ kubectl describe pods -n kube-system metrics-server-678f4bf65b-77t8p
-Name:                 metrics-server-678f4bf65b-77t8p
+$ kubectl describe pods -n kube-system metrics-server-847dcc659d-hztqw
+Name:                 metrics-server-847dcc659d-hztqw
 Namespace:            kube-system
 Priority:             2000000000
 Priority Class Name:  system-cluster-critical
-Node:                 k8s-control-plane/10.89.0.2
-Start Time:           Wed, 08 Jun 2022 09:53:58 +0200
+Node:                 minikube-m03/192.168.49.4
+Start Time:           Thu, 16 Jun 2022 17:14:19 +0200
 Labels:               k8s-app=metrics-server
-                      pod-template-hash=678f4bf65b
+                      pod-template-hash=847dcc659d
 Annotations:          <none>
 Status:               Running
-IP:                   10.244.0.9
+IP:                   10.244.2.2
 IPs:
-  IP:           10.244.0.9
-Controlled By:  ReplicaSet/metrics-server-678f4bf65b
+  IP:           10.244.2.2
+Controlled By:  ReplicaSet/metrics-server-847dcc659d
 Containers:
   metrics-server:
-    Container ID:  containerd://e73e2c3aa80447234e9b31ab4bee19fb36ab2af01eb6378fd436acc2c5c5af0c
+    Container ID:  docker://ec64d9cd1d25d49f4bcff9af81c7a2ef29673a4b22c569a0755c62581dbc1c9b
     Image:         k8s.gcr.io/metrics-server/metrics-server:v0.6.1
-    Image ID:      k8s.gcr.io/metrics-server/metrics-server@sha256:5ddc6458eb95f5c70bd13fdab90cbd7d6ad1066e5b528ad1dcb28b76c5fb2f00
+    Image ID:      docker-pullable://k8s.gcr.io/metrics-server/metrics-server@sha256:5ddc6458eb95f5c70bd13fdab90cbd7d6ad1066e5b528ad1dcb28b76c5fb2f00
     Port:          4443/TCP
     Host Port:     0/TCP
     Args:
@@ -1085,7 +1466,7 @@ Containers:
       --kubelet-use-node-status-port
       --metric-resolution=15s
     State:          Running
-      Started:      Wed, 08 Jun 2022 09:53:59 +0200
+      Started:      Thu, 16 Jun 2022 17:14:24 +0200
     Ready:          False
     Restart Count:  0
     Requests:
@@ -1096,7 +1477,7 @@ Containers:
     Environment:  <none>
     Mounts:
       /tmp from tmp-dir (rw)
-      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-t2z2m (ro)
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-9z7lj (ro)
 Conditions:
   Type              Status
   Initialized       True 
@@ -1108,7 +1489,7 @@ Volumes:
     Type:       EmptyDir (a temporary directory that shares a pod's lifetime)
     Medium:     
     SizeLimit:  <unset>
-  kube-api-access-t2z2m:
+  kube-api-access-9z7lj:
     Type:                    Projected (a volume that contains injected data from multiple sources)
     TokenExpirationSeconds:  3607
     ConfigMapName:           kube-root-ca.crt
@@ -1119,15 +1500,48 @@ Node-Selectors:              kubernetes.io/os=linux
 Tolerations:                 node.kubernetes.io/not-ready:NoExecute op=Exists for 300s
                              node.kubernetes.io/unreachable:NoExecute op=Exists for 300s
 Events:
-  Type     Reason     Age                  From               Message
-  ----     ------     ----                 ----               -------
-  Normal   Scheduled  31m                  default-scheduler  Successfully assigned kube-system/metrics-server-678f4bf65b-77t8p to k8s-control-plane
-  Normal   Pulled     31m                  kubelet            Container image "k8s.gcr.io/metrics-server/metrics-server:v0.6.1" already present on machine
-  Normal   Created    31m                  kubelet            Created container metrics-server
-  Normal   Started    31m                  kubelet            Started container metrics-server
-  Warning  Unhealthy  73s (x202 over 30m)  kubelet            Readiness probe failed: HTTP probe failed with statuscode: 500
+  Type     Reason     Age                From               Message
+  ----     ------     ----               ----               -------
+  Normal   Scheduled  2m7s               default-scheduler  Successfully assigned kube-system/metrics-server-847dcc659d-hztqw to minikube-m03
+  Normal   Pulling    2m6s               kubelet            Pulling image "k8s.gcr.io/metrics-server/metrics-server:v0.6.1"
+  Normal   Pulled     2m2s               kubelet            Successfully pulled image "k8s.gcr.io/metrics-server/metrics-server:v0.6.1" in 4.022840519s
+  Normal   Created    2m2s               kubelet            Created container metrics-server
+  Normal   Started    2m2s               kubelet            Started container metrics-server
+  Warning  Unhealthy  7s (x11 over 97s)  kubelet            Readiness probe failed: HTTP probe failed with statuscode: 500
 ----
 
+De momento no sé cómo solucionar esto, aunque creo que es un problema por no
+haber configurado los parámetros al lanzar el Metrics Server, así que lo
+desinstalo:
+
+[source,console]
+----
+$ kubectl delete -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+serviceaccount "metrics-server" deleted
+clusterrole.rbac.authorization.k8s.io "system:aggregated-metrics-reader" deleted
+clusterrole.rbac.authorization.k8s.io "system:metrics-server" deleted
+rolebinding.rbac.authorization.k8s.io "metrics-server-auth-reader" deleted
+clusterrolebinding.rbac.authorization.k8s.io "metrics-server:system:auth-delegator" deleted
+clusterrolebinding.rbac.authorization.k8s.io "system:metrics-server" deleted
+service "metrics-server" deleted
+deployment.apps "metrics-server" deleted
+apiservice.apiregistration.k8s.io "v1beta1.metrics.k8s.io" deleted
+
+kubectl get pods --namespace kube-system
+NAME                               READY   STATUS    RESTARTS   AGE
+coredns-64897985d-xrxk5            1/1     Running   0          40m
+etcd-minikube                      1/1     Running   0          40m
+kindnet-kmx5v                      1/1     Running   0          40m
+kindnet-llx4l                      1/1     Running   0          40m
+kindnet-mb27w                      1/1     Running   0          40m
+kube-apiserver-minikube            1/1     Running   0          40m
+kube-controller-manager-minikube   1/1     Running   0          40m
+kube-proxy-2ldqz                   1/1     Running   0          40m
+kube-proxy-75x8c                   1/1     Running   0          40m
+kube-proxy-7bdr4                   1/1     Running   0          40m
+kube-scheduler-minikube            1/1     Running   0          40m
+storage-provisioner                1/1     Running   0          40m
+----
 
 === Contextos
 
@@ -1136,9 +1550,14 @@ nombre.  `kubectl` permite consultar el contexto actual y cambiar de contexto.
 
 ==== kubectl config current-context
 
-Muestra la configuración actual del cliente `kubectl`, como el cluster al que
-se conectará y el contexto actual.  El archivo de configuración se guarda en
-`~/.kube/config`.
+Muestra el contexto que usa `kubectl`:
+
+[source,console]
+----
+$ kubectl config current-context
+minikube
+----
+
 
 ==== kubectl config get-contexts <contexto>
 
@@ -1149,11 +1568,11 @@ concreto:
 ----
 $ kubectl config get-contexts
 CURRENT   NAME       CLUSTER    AUTHINFO   NAMESPACE
-*         kind-k8s   kind-k8s   kind-k8s
+*         minikube   minikube   minikube   default
 
-$ kubectl config get-contexts kind-k8s
+$ kubectl config get-contexts minikube
 CURRENT   NAME       CLUSTER    AUTHINFO   NAMESPACE
-*         kind-k8s   kind-k8s   kind-k8s
+*         minikube   minikube   minikube   default
 ----
 
 ==== kubectl config use-context <contexto>
@@ -1169,8 +1588,52 @@ Modifica un contexto:
 
 [source,console]
 ----
-$ kubectl config set-context kind-k8s --namespace=blas
-Context "kind-k8s" modified.
+$ kubectl config set-context minikube --namespace=blas
+Context "minikube" modified.
+----
+
+==== kubectl config view
+
+Muestra el archivo _kubeconfig_ actual:
+
+[source,console]
+----
+$ kubectl config view
+apiVersion: v1
+clusters:
+- cluster:
+    certificate-authority: /home/jcouto/.minikube/ca.crt
+    extensions:
+    - extension:
+        last-update: Thu, 16 Jun 2022 16:57:10 CEST
+        provider: minikube.sigs.k8s.io
+        version: v1.25.2
+      name: cluster_info
+    server: https://192.168.49.2:8443
+  name: minikube
+contexts:
+- context:
+    cluster: minikube
+    extensions:
+    - extension:
+        last-update: Thu, 16 Jun 2022 16:57:10 CEST
+        provider: minikube.sigs.k8s.io
+        version: v1.25.2
+      name: context_info
+    namespace: default
+    user: minikube
+  name: minikube
+current-context: minikube
+kind: Config
+preferences: {}
+users:
+- name: minikube
+  user:
+    client-certificate: /home/jcouto/.minikube/profiles/minikube/client.crt
+    client-key: /home/jcouto/.minikube/profiles/minikube/client.key
+
+$ diff ~/.kube/config (kubectl config view | psub)
+$
 ----
 
 == Para saber más
@@ -1195,7 +1658,6 @@ Todos los contenedores de un pod comparten la dirección IP 127.0.0.1 y la
 pueden usar para comunicarse entre ellos.
 
 [[selector,_selector_]]
-selector:: Filtros que utilizan etiquetas para elegir los objetos a los que
-aplican.  Por ejemplo, se puede utilizar `nodeSelector` en la definición de un
-pod para indicar que solo deben ejecutarse en los nodos que tengan las
-etiquetas indicadas.
+selector:: Filtro que utiliza etiquetas para elegir objetos.  Por ejemplo, se
+puede utilizar `nodeSelector` en la definición de un pod para indicar que solo
+debe ejecutarse en los nodos que tengan las etiquetas indicadas.
