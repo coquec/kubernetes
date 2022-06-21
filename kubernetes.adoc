@@ -201,6 +201,33 @@ $ minikube start --kubernetes-version=latest --driver=docker --nodes=3
 `minikube` crea una configuración para `kubectl` en `~/kube/config` para
 permitirle conectarse al cluster recién creado.
 
+[[metrics_server,`metrics-server`]]
+==== Instalación de metrics server
+
+Algunas funciones de K8s, como la obtención de métricas de los pods con
+<<kubectl_top>> o el autoescalado horizontal, necesitan que esté instalado el
+paquete https://github.com/kubernetes-sigs/metrics-server[Kubernetes Metrics
+Server], que se puede desplegar así, siguiendo un apaño documentado
+https://github.com/kubernetes-sigs/metrics-server/issues/196#issuecomment-451061841[aquí]
+para que funcione con `minikube`, que usa certificados digitales autofirmados
+para los `kubelet` de los nodos:
+
+[source,console]
+----
+$ curl -sL https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml | sed -e '/cert-dir/p' -e '0,/cert-dir/s/cert-dir.*/kubelet-insecure-tls/'| kubectl apply -f -
+serviceaccount/metrics-server created
+clusterrole.rbac.authorization.k8s.io/system:aggregated-metrics-reader created
+clusterrole.rbac.authorization.k8s.io/system:metrics-server created
+rolebinding.rbac.authorization.k8s.io/metrics-server-auth-reader created
+clusterrolebinding.rbac.authorization.k8s.io/metrics-server:system:auth-delegator created
+clusterrolebinding.rbac.authorization.k8s.io/system:metrics-server created
+service/metrics-server created
+deployment.apps/metrics-server created
+apiservice.apiregistration.k8s.io/v1beta1.metrics.k8s.io created
+----
+
+==== Instalación de kubectl
+
 Aunque recomienda definir el alias `kubectl='minikube kubectl --'` para
 utilizar su propio cliente de `kubectl`, para garantizar que usamos la misma
 versión del cliente y del servidor, pero con él
@@ -391,7 +418,7 @@ selector:
 Este tipo de seleccionadores admite los operadores `In`, `NotIn`, `Exists`,
 `DoesNotExist`, `Gt` y `Lt`.
 
-=== Control de los trabajos
+== Control de los trabajos
 
 La misión principal de K8s es asegurarse de los trabajos se ejecutan
 adecuadamente, monitorizándolos y asignándoles los recursos que necesiten.
@@ -403,7 +430,7 @@ manualmente es mejor utilizar siempre algún tipo de controlador para garantizar
 su funcionamiento.
 
 [[replicasets,_replica sets_]]
-==== Replica Sets
+=== Replica Sets
 
 Los _replica sets_ (`ReplicaSet`), garantizan que hay un número determinado de
 réplicas de un pod funcionando (levantados y disponibles), creando los que
@@ -476,7 +503,6 @@ $ kubectl get events --watch
 0s          Normal    Started            pod/nginx-rs-z87k5    Started container nginx
 0s          Normal    Started            pod/nginx-rs-t46pz    Started container nginx
 ----
-
 
 [source,console]
 ----
@@ -677,7 +703,7 @@ nginx-rs-scjhn   1/1     Running   0          7m9s
 ----
 
 Al eliminar un _replica set_, se cambia el número de objetos controlados por él
-a 0 para finalizarlos, y después se elimina el propio _replica set_:
+a 0 para terminarlos, y después se elimina el propio _replica set_:
 
 [source,console]
 ----
@@ -688,14 +714,440 @@ $ kubectl get pods
 No resources found in blas namespace.
 ----
 
-[[deployments,_deployments_]]
-==== Deployments
+Se puede eliminar un _replica set_ sin borrar los pods que controla usando la
+opción `--cascade=orphan` de `kubectl delete`.  Esto permitiría, por ejemplo,
+sustituir un _replica set_ por otro nuevo para controlar los mismos pods,
+aunque, si este tuviera una nueva plantilla para los pods, solo se utilizaría
+para los pods nuevos que hubiera que crear.
 
-==== ReplicationControllers
+Otra cosa que puede ser útil es hacer que un pod deje de estar controlado por
+un _replica set_, cambiando sus etiquetas.
+
+Se puede cambiar al vuelo el número de pods controlados por un _replica set_
+cambiando su campo `.spec.replicas`.  Los pods se crearán o se destruirán según
+sea necesario.  Se puede automatizar esto utilizando un _horizontal pod
+autoscaler_, como el siguiente:
+
+[source,yaml]
+----
+---
+apiVersion: autoscaling/v1
+kind: HorizontalPodAutoscaler
+metadata:
+  name: nginx-scaler
+spec:
+  scaleTargetRef:
+    kind: ReplicaSet
+    name: nginx-rs
+  minReplicas: 5
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 50
+----
+
+[source,console]
+----
+$ # Otra forma de crear el autoescalador sin usar un YAML.
+$ kubectl autoscale rs nginx-rs --max=10 --min=5 --cpu-percent=50
+horizontalpodautoscaler.autoscaling/nginx-rs autoscaled
+----
+
+Para que el ejemplo de autoescalado funcione, hace falta tener habilitado el
+<<metrics_server>>.  Si no, podemos ver un error en autoescalador:
+
+[source,console]
+----
+$ kubectl describe horizontalpodautoscalers.autoscaling nginx-rs
+Warning: autoscaling/v2beta2 HorizontalPodAutoscaler is deprecated in v1.23+, unavailable in v1.26+; use autoscaling/v2 HorizontalPodAutoscaler
+Name:                                                  nginx-rs
+Namespace:                                             default
+Labels:                                                <none>
+Annotations:                                           <none>
+CreationTimestamp:                                     Mon, 20 Jun 2022 12:10:56 +0200
+Reference:                                             ReplicaSet/nginx-rs
+Metrics:                                               ( current / target )
+  resource cpu on pods  (as a percentage of request):  <unknown> / 50%
+Min replicas:                                          5
+Max replicas:                                          10
+ReplicaSet pods:                                       5 current / 5 desired
+Conditions:
+  Type           Status  Reason                   Message
+  ----           ------  ------                   -------
+  AbleToScale    True    SucceededGetScale        the HPA controller was able to get the target's current scale
+  ScalingActive  False   FailedGetResourceMetric  the HPA was unable to compute the replica count: failed to get cpu utilization: unable to get metrics for resource cpu: unable to fetch metrics from resource metrics API: the server could not find the requested resource (get pods.metrics.k8s.io)
+Events:
+  Type     Reason                        Age   From                       Message
+  ----     ------                        ----  ----                       -------
+  Normal   SuccessfulRescale             26s   horizontal-pod-autoscaler  New size: 5; reason: Current number of replicas below Spec.MinReplicas
+  Warning  FailedGetResourceMetric       10s   horizontal-pod-autoscaler  failed to get cpu utilization: unable to get metrics for resource cpu: unable to fetch metrics from resource metrics API: the server could not find the requested resource (get pods.metrics.k8s.io)
+  Warning  FailedComputeMetricsReplicas  10s   horizontal-pod-autoscaler  invalid metrics (1 invalid out of 1), first error is: failed to get cpu utilization: unable to get metrics for resource cpu: unable to fetch metrics from resource metrics API: the server could not find the requested resource (get pods.metrics.k8s.io)
+----
+
+[source,console]
+----
+$ kubectl get pods
+NAME             READY   STATUS    RESTARTS   AGE
+nginx-rs-2z8xx   1/1     Running   0          85s
+nginx-rs-c5x48   1/1     Running   0          85s
+nginx-rs-clx8v   1/1     Running   0          35s
+nginx-rs-k4894   1/1     Running   0          85s
+nginx-rs-znxwq   1/1     Running   0          35s
+----
+
+En este caso, se han creado dos pods adicionales porque no se cumplía con el
+mínimo pedido en el autoescalador, pero el escalado por uso de la CPU no
+funcionará.
+
+[[deployments,_deployments_]]
+=== Deployments
+
+Los despliegues (_deployments_), son un método declarativo de gestionar pods
+utilizando por debajo <<replicasets>>.  Es la forma recomendada de gestionar
+los pods en un cluster de K8s.
+
+El siguiente es un ejemplo de un despliegue compuesto por tres pods de nginx:
+
+.dep-nginx.yaml
+[source,yaml]
+----
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  labels:
+    app: nginx
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx
+        ports:
+        - containerPort: 80
+----
+
+Al ejecutarlo, se crea el `Deployment`, los pods y el <<replicasets,_replica
+set_>> que los gestiona:
+
+[source,console]
+----
+
+$ kubectl apply -f dep-nginx.yaml
+deployment.apps/nginx-deployment created
+
+$ kubectl rollout status deployment/nginx-deployment
+Waiting for deployment "nginx-deployment" rollout to finish: 0 of 3 updated replicas are available...
+Waiting for deployment "nginx-deployment" rollout to finish: 1 of 3 updated replicas are available...
+Waiting for deployment "nginx-deployment" rollout to finish: 2 of 3 updated replicas are available...
+deployment "nginx-deployment" successfully rolled out
+
+$ kubectl get pods
+NAME                                READY   STATUS    RESTARTS   AGE
+nginx-deployment-74d589986c-lhwsg   1/1     Running   0          5s
+nginx-deployment-74d589986c-qvqfm   1/1     Running   0          5s
+nginx-deployment-74d589986c-vsmbz   1/1     Running   0          5s
+
+$ kubectl get rs
+NAME                          DESIRED   CURRENT   READY   AGE
+nginx-deployment-74d589986c   3         3         3       22s
+
+$ kubectl get deployments
+NAME               READY   UP-TO-DATE   AVAILABLE   AGE
+nginx-deployment   3/3     3            3           35s
+----
+
+Los pods y los <<replicasets>> gestionados con despliegues tienen en sus
+nombres el valor de la etiqueta `pod-template-hash` que el despliegue incluye
+en ellos.  Esta etiqueta se calcula haciendo un hash del `PodTemplate` y
+utilizándolo como semilla para generar un valor aleatorio, que es el que se
+incluye en la etiqueta:
+
+[source,console]
+----
+
+$ kubectl describe pod/nginx-deployment-74d589986c-lhwsg
+Name:         nginx-deployment-74d589986c-lhwsg
+Namespace:    default
+Priority:     0
+Node:         minikube-m03/192.168.49.4
+Start Time:   Mon, 20 Jun 2022 12:46:37 +0200
+Labels:       app=nginx
+              pod-template-hash=74d589986c
+...
+...
+----
+
+Al eliminar el despliegue, se eliminan todos los recursos que creó:
+
+[source,console]
+----
+$ kubectl delete deployment nginx-deployment
+deployment.apps "nginx-deployment" deleted
+
+$ kubectl get pods
+No resources found in default namespace.
+----
+
+Los despliegues permiten usar como selectores `matchLabels` y/o
+`matchExpressions`, con la condición de que la plantilla del pod cumpla con
+ellos.
+
+==== Actualización de un despliegue
+
+Si se cambia la plantilla de los pods del despliegue, se invoca un _rollout_,
+creando nuevos pods con la nueva plantilla y eliminando los antiguos por
+tandas, hasta sustituirlos todos.  Por defecto, y siempre sin contar los pods
+que estén en estado _terminating_, se permite tener hasta un 125% más de pods
+que el máximo permitido (un 25% de aumento), y se garantiza que al menos se
+tiene un 75% del número deseado levantados (un 25% no disponible).
+
+NOTE: Parece que los `ReplicaSet` creados por los despliegues no se eliminan,
+solo se fija su número de pods a 0.
+
+Las siguientes salidas se han obtenido justo después de editar la definición
+del despliegue anterior para añadir una etiqueta en los pods.  Atención a cómo
+cambia el nombre de las etiquetas de los nuevos recursos creados:
+
+[source,console]
+----
+jcouto@bazo ~> kubectl get pods
+NAME                                READY   STATUS    RESTARTS   AGE
+nginx-deployment-74d589986c-c287l   1/1     Running   0          9m21s
+nginx-deployment-74d589986c-fgz2b   1/1     Running   0          9m24s
+nginx-deployment-74d589986c-qtwlc   1/1     Running   0          9m18s
+jcouto@bazo ~> kubectl get pods
+NAME                                READY   STATUS              RESTARTS   AGE
+nginx-deployment-74d589986c-c287l   1/1     Running             0          9m36s
+nginx-deployment-74d589986c-fgz2b   1/1     Running             0          9m39s
+nginx-deployment-74d589986c-qtwlc   1/1     Running             0          9m33s
+nginx-deployment-795bc797c7-xjh4p   0/1     ContainerCreating   0          2s
+jcouto@bazo ~> kubectl get pods
+NAME                                READY   STATUS        RESTARTS   AGE
+nginx-deployment-74d589986c-c287l   1/1     Terminating   0          9m37s
+nginx-deployment-74d589986c-fgz2b   1/1     Running       0          9m40s
+nginx-deployment-74d589986c-qtwlc   1/1     Running       0          9m34s
+nginx-deployment-795bc797c7-xjh4p   1/1     Running       0          3s
+jcouto@bazo ~> kubectl get pods
+NAME                                READY   STATUS              RESTARTS   AGE
+nginx-deployment-74d589986c-fgz2b   1/1     Running             0          9m41s
+nginx-deployment-74d589986c-qtwlc   1/1     Running             0          9m35s
+nginx-deployment-795bc797c7-q7x74   0/1     ContainerCreating   0          1s
+nginx-deployment-795bc797c7-xjh4p   1/1     Running             0          4s
+jcouto@bazo ~> kubectl get pods
+
+NAME                                READY   STATUS              RESTARTS   AGE
+nginx-deployment-74d589986c-fgz2b   1/1     Running             0          9m43s
+nginx-deployment-74d589986c-qtwlc   1/1     Running             0          9m37s
+nginx-deployment-795bc797c7-q7x74   0/1     ContainerCreating   0          3s
+nginx-deployment-795bc797c7-xjh4p   1/1     Running             0          6s
+jcouto@bazo ~> 
+jcouto@bazo ~> kubectl get pods
+NAME                                READY   STATUS              RESTARTS   AGE
+nginx-deployment-74d589986c-fgz2b   1/1     Terminating         0          9m44s
+nginx-deployment-74d589986c-qtwlc   1/1     Running             0          9m38s
+nginx-deployment-795bc797c7-nmst8   0/1     ContainerCreating   0          1s
+nginx-deployment-795bc797c7-q7x74   1/1     Running             0          4s
+nginx-deployment-795bc797c7-xjh4p   1/1     Running             0          7s
+jcouto@bazo ~> kubectl get pods
+NAME                                READY   STATUS              RESTARTS   AGE
+nginx-deployment-74d589986c-qtwlc   1/1     Running             0          9m39s
+nginx-deployment-795bc797c7-nmst8   0/1     ContainerCreating   0          2s
+nginx-deployment-795bc797c7-q7x74   1/1     Running             0          5s
+nginx-deployment-795bc797c7-xjh4p   1/1     Running             0          8s
+jcouto@bazo ~> kubectl get pods
+NAME                                READY   STATUS        RESTARTS   AGE
+nginx-deployment-74d589986c-qtwlc   1/1     Terminating   0          9m40s
+nginx-deployment-795bc797c7-nmst8   1/1     Running       0          3s
+nginx-deployment-795bc797c7-q7x74   1/1     Running       0          6s
+nginx-deployment-795bc797c7-xjh4p   1/1     Running       0          9s
+jcouto@bazo ~> kubectl get pods
+NAME                                READY   STATUS    RESTARTS   AGE
+nginx-deployment-795bc797c7-nmst8   1/1     Running   0          4s
+nginx-deployment-795bc797c7-q7x74   1/1     Running   0          7s
+nginx-deployment-795bc797c7-xjh4p   1/1     Running   0          10s
+
+jcouto@bazo ~> kubectl get rs
+NAME                          DESIRED   CURRENT   READY   AGE
+nginx-deployment-74d589986c   0         0         0       3h58m
+nginx-deployment-795bc797c7   3         3         3       42s
+----
+
+Se puede ver cómo se van modificando los valores de los <<replicasets>>
+gestionados por los despliegues viendo los eventos "scaled up" y "scaled down"
+de estos:
+
+[source,console]
+----
+Name:                   nginx-deployment
+Namespace:              default
+CreationTimestamp:      Mon, 20 Jun 2022 12:46:37 +0200
+Labels:                 app=nginx
+Annotations:            deployment.kubernetes.io/revision: 6
+Selector:               app=nginx
+Replicas:               3 desired | 3 updated | 3 total | 3 available | 0 unavailable
+StrategyType:           RollingUpdate
+MinReadySeconds:        0
+RollingUpdateStrategy:  25% max unavailable, 25% max surge
+Pod Template:
+  Labels:  app=nginx
+           etiqueta=blas
+  Containers:
+   nginx:
+    Image:        nginx
+    Port:         80/TCP
+    Host Port:    0/TCP
+    Environment:  <none>
+    Mounts:       <none>
+  Volumes:        <none>
+Conditions:
+  Type           Status  Reason
+  ----           ------  ------
+  Available      True    MinimumReplicasAvailable
+  Progressing    True    NewReplicaSetAvailable
+OldReplicaSets:  <none>
+NewReplicaSet:   nginx-deployment-795bc797c7 (3/3 replicas created)
+Events:
+  Type    Reason             Age   From                   Message
+  ----    ------             ----  ----                   -------
+  Normal  ScalingReplicaSet  76s   deployment-controller  Scaled up replica set nginx-deployment-795bc797c7 to 1
+  Normal  ScalingReplicaSet  73s   deployment-controller  Scaled down replica set nginx-deployment-74d589986c to 2
+  Normal  ScalingReplicaSet  73s   deployment-controller  Scaled up replica set nginx-deployment-795bc797c7 to 2
+  Normal  ScalingReplicaSet  70s   deployment-controller  Scaled up replica set nginx-deployment-795bc797c7 to 3
+  Normal  ScalingReplicaSet  70s   deployment-controller  Scaled down replica set nginx-deployment-74d589986c to 1
+  Normal  ScalingReplicaSet  67s   deployment-controller  Scaled down replica set nginx-deployment-74d589986c to 0
+----
+
+Si deshacemos el cambio, la plantilla del pod vuelve a quedar como estaba, y el
+valor del campo `pod-template-hash` de los nuevos recursos que se crean como
+parte del _rollout_ coincide con el que teníamos originalmente.
+
+==== Historia de los despliegues
+
+K8s guarda la historia de los rollouts hechos con un despliegue:
+
+[source,console]
+----
+$ kubectl rollout history deployment/nginx-deployment
+deployment.apps/nginx-deployment 
+REVISION  CHANGE-CAUSE
+2         <none>
+5         <none>
+6         <none>
+----
+
+Se puede ver cómo es cada versión añadiendo la opción `--revision=<n>`.  En
+este caso, solo cambian las etiquetas entre versiones:
+
+[source,console]
+----
+$ kubectl rollout history deployment/nginx-deployment --revision=2
+deployment.apps/nginx-deployment with revision #2
+Pod Template:
+  Labels:       app=nginx
+        otra=blas
+        pod-template-hash=7678d86c77
+  Containers:
+   nginx:
+    Image:      nginx
+    Port:       80/TCP
+    Host Port:  0/TCP
+    Environment:        <none>
+    Mounts:     <none>
+  Volumes:      <none>
+
+$ kubectl rollout history deployment/nginx-deployment --revision=5
+deployment.apps/nginx-deployment with revision #5
+Pod Template:
+  Labels:       app=nginx
+        pod-template-hash=74d589986c
+  Containers:
+   nginx:
+    Image:      nginx
+    Port:       80/TCP
+    Host Port:  0/TCP
+    Environment:        <none>
+    Mounts:     <none>
+  Volumes:      <none>
+
+$ kubectl rollout history deployment/nginx-deployment --revision=6
+deployment.apps/nginx-deployment with revision #6
+Pod Template:
+  Labels:       app=nginx
+        etiqueta=blas
+        pod-template-hash=795bc797c7
+  Containers:
+   nginx:
+    Image:      nginx
+    Port:       80/TCP
+    Host Port:  0/TCP
+    Environment:        <none>
+    Mounts:     <none>
+  Volumes:      <none>
+----
+
+Se puede volver a la versión anterior de un despliegue así:
+
+[source,console]
+----
+$ kubectl rollout undo deployment/nginx-deployment
+deployment.apps/nginx-deployment rolled back
+----
+
+Se puede volver a una versión concreta añadiendo `--to-revision=<n>` a la orden
+anterior.
+
+==== Escalado
+
+Se puede cambiar los parámetros de escalado de un despliegue con `kubectl
+scale`.  Como eso con cambia la plantilla del pod del despliegue, no se generan
+nuevas versiones de la historia:
+
+[source,console]
+----
+$ kubectl rollout history deployment/nginx-deployment
+deployment.apps/nginx-deployment 
+REVISION  CHANGE-CAUSE
+2         <none>
+10        <none>
+11        <none>
+
+$ kubectl scale deployment/nginx-deployment --replicas=10
+deployment.apps/nginx-deployment scaled
+
+$ kubectl rollout history deployment/nginx-deployment
+deployment.apps/nginx-deployment 
+REVISION  CHANGE-CAUSE
+2         <none>
+10        <none>
+11        <none>
+
+$ kubectl get pods
+NAME                                READY   STATUS    RESTARTS   AGE
+nginx-deployment-74d589986c-4rwmk   1/1     Running   0          15s
+nginx-deployment-74d589986c-8r858   1/1     Running   0          15s
+nginx-deployment-74d589986c-9dncr   1/1     Running   0          4m26s
+nginx-deployment-74d589986c-fvqgv   1/1     Running   0          15s
+nginx-deployment-74d589986c-kvzwv   1/1     Running   0          15s
+nginx-deployment-74d589986c-lmnlk   1/1     Running   0          4m23s
+nginx-deployment-74d589986c-p5cpp   1/1     Running   0          15s
+nginx-deployment-74d589986c-s7kpl   1/1     Running   0          15s
+nginx-deployment-74d589986c-v8kdw   1/1     Running   0          15s
+nginx-deployment-74d589986c-xg2jl   1/1     Running   0          4m20s
+----
+
+=== ReplicationControllers
 
 Los _replication controllers_ (`ReplicationController`), tienen una función
-similar a las de los <<replicasets>>.  En la actualidad es preferible utilizar
-<<deployments>> o <<replicasets>> en su lugar.
+similar a las de los <<replicasets>>.
+
+NOTE: En la actualidad es preferible utilizar <<deployments>> o <<replicasets>>.
 
 La siguiente configuración garantiza que hay tres instancias de `nginx`
 corriendo en nuestro cluster:
@@ -789,7 +1241,6 @@ en `~/.config/fish/config.fish`:
 ----
 kubectl completion fish | source
 ----
-
 
 === Información sobre el cluster
 
@@ -1397,150 +1848,15 @@ tiempo relativo que especifiquemos (p. ej, `--since=10m` para ver los de los
 
 Muestra el uso de los recursos de un nodo o de un pod.  Solo funciona si
 tenemos corriendo en el cluster la API de métricas proporcionada por
-`metrics-server`, que se puede desplegar así:
-
-[source,console]
-----
-$ kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
-serviceaccount/metrics-server created
-clusterrole.rbac.authorization.k8s.io/system:aggregated-metrics-reader created
-clusterrole.rbac.authorization.k8s.io/system:metrics-server created
-rolebinding.rbac.authorization.k8s.io/metrics-server-auth-reader created
-clusterrolebinding.rbac.authorization.k8s.io/metrics-server:system:auth-delegator created
-clusterrolebinding.rbac.authorization.k8s.io/system:metrics-server created
-service/metrics-server created
-deployment.apps/metrics-server created
-apiservice.apiregistration.k8s.io/v1beta1.metrics.k8s.io created
-----
-
-WARNING: Después de desplegarlo, no consigo que el pod aparezca listo (la
-comprobación devuelve un error 500), y no funciona:
+<<metrics_server>>.
 
 [source,console]
 ----
 $ kubectl top node
-Error from server (ServiceUnavailable): the server is currently unable to handle the request (get nodes.metrics.k8s.io)
-
-$ kubectl get pods -n kube-system
-NAME                               READY   STATUS    RESTARTS   AGE
-coredns-64897985d-xrxk5            1/1     Running   0          17m
-etcd-minikube                      1/1     Running   0          17m
-kindnet-kmx5v                      1/1     Running   0          17m
-kindnet-llx4l                      1/1     Running   0          17m
-kindnet-mb27w                      1/1     Running   0          17m
-kube-apiserver-minikube            1/1     Running   0          17m
-kube-controller-manager-minikube   1/1     Running   0          17m
-kube-proxy-2ldqz                   1/1     Running   0          17m
-kube-proxy-75x8c                   1/1     Running   0          17m
-kube-proxy-7bdr4                   1/1     Running   0          17m
-kube-scheduler-minikube            1/1     Running   0          17m
-metrics-server-847dcc659d-hztqw    0/1     Running   0          37s
-storage-provisioner                1/1     Running   0          17m
-
-$ kubectl describe pods -n kube-system metrics-server-847dcc659d-hztqw
-Name:                 metrics-server-847dcc659d-hztqw
-Namespace:            kube-system
-Priority:             2000000000
-Priority Class Name:  system-cluster-critical
-Node:                 minikube-m03/192.168.49.4
-Start Time:           Thu, 16 Jun 2022 17:14:19 +0200
-Labels:               k8s-app=metrics-server
-                      pod-template-hash=847dcc659d
-Annotations:          <none>
-Status:               Running
-IP:                   10.244.2.2
-IPs:
-  IP:           10.244.2.2
-Controlled By:  ReplicaSet/metrics-server-847dcc659d
-Containers:
-  metrics-server:
-    Container ID:  docker://ec64d9cd1d25d49f4bcff9af81c7a2ef29673a4b22c569a0755c62581dbc1c9b
-    Image:         k8s.gcr.io/metrics-server/metrics-server:v0.6.1
-    Image ID:      docker-pullable://k8s.gcr.io/metrics-server/metrics-server@sha256:5ddc6458eb95f5c70bd13fdab90cbd7d6ad1066e5b528ad1dcb28b76c5fb2f00
-    Port:          4443/TCP
-    Host Port:     0/TCP
-    Args:
-      --cert-dir=/tmp
-      --secure-port=4443
-      --kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname
-      --kubelet-use-node-status-port
-      --metric-resolution=15s
-    State:          Running
-      Started:      Thu, 16 Jun 2022 17:14:24 +0200
-    Ready:          False
-    Restart Count:  0
-    Requests:
-      cpu:        100m
-      memory:     200Mi
-    Liveness:     http-get https://:https/livez delay=0s timeout=1s period=10s #success=1 #failure=3
-    Readiness:    http-get https://:https/readyz delay=20s timeout=1s period=10s #success=1 #failure=3
-    Environment:  <none>
-    Mounts:
-      /tmp from tmp-dir (rw)
-      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-9z7lj (ro)
-Conditions:
-  Type              Status
-  Initialized       True 
-  Ready             False 
-  ContainersReady   False 
-  PodScheduled      True 
-Volumes:
-  tmp-dir:
-    Type:       EmptyDir (a temporary directory that shares a pod's lifetime)
-    Medium:     
-    SizeLimit:  <unset>
-  kube-api-access-9z7lj:
-    Type:                    Projected (a volume that contains injected data from multiple sources)
-    TokenExpirationSeconds:  3607
-    ConfigMapName:           kube-root-ca.crt
-    ConfigMapOptional:       <nil>
-    DownwardAPI:             true
-QoS Class:                   Burstable
-Node-Selectors:              kubernetes.io/os=linux
-Tolerations:                 node.kubernetes.io/not-ready:NoExecute op=Exists for 300s
-                             node.kubernetes.io/unreachable:NoExecute op=Exists for 300s
-Events:
-  Type     Reason     Age                From               Message
-  ----     ------     ----               ----               -------
-  Normal   Scheduled  2m7s               default-scheduler  Successfully assigned kube-system/metrics-server-847dcc659d-hztqw to minikube-m03
-  Normal   Pulling    2m6s               kubelet            Pulling image "k8s.gcr.io/metrics-server/metrics-server:v0.6.1"
-  Normal   Pulled     2m2s               kubelet            Successfully pulled image "k8s.gcr.io/metrics-server/metrics-server:v0.6.1" in 4.022840519s
-  Normal   Created    2m2s               kubelet            Created container metrics-server
-  Normal   Started    2m2s               kubelet            Started container metrics-server
-  Warning  Unhealthy  7s (x11 over 97s)  kubelet            Readiness probe failed: HTTP probe failed with statuscode: 500
-----
-
-De momento no sé cómo solucionar esto, aunque creo que es un problema por no
-haber configurado los parámetros al lanzar el Metrics Server, así que lo
-desinstalo:
-
-[source,console]
-----
-$ kubectl delete -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
-serviceaccount "metrics-server" deleted
-clusterrole.rbac.authorization.k8s.io "system:aggregated-metrics-reader" deleted
-clusterrole.rbac.authorization.k8s.io "system:metrics-server" deleted
-rolebinding.rbac.authorization.k8s.io "metrics-server-auth-reader" deleted
-clusterrolebinding.rbac.authorization.k8s.io "metrics-server:system:auth-delegator" deleted
-clusterrolebinding.rbac.authorization.k8s.io "system:metrics-server" deleted
-service "metrics-server" deleted
-deployment.apps "metrics-server" deleted
-apiservice.apiregistration.k8s.io "v1beta1.metrics.k8s.io" deleted
-
-kubectl get pods --namespace kube-system
-NAME                               READY   STATUS    RESTARTS   AGE
-coredns-64897985d-xrxk5            1/1     Running   0          40m
-etcd-minikube                      1/1     Running   0          40m
-kindnet-kmx5v                      1/1     Running   0          40m
-kindnet-llx4l                      1/1     Running   0          40m
-kindnet-mb27w                      1/1     Running   0          40m
-kube-apiserver-minikube            1/1     Running   0          40m
-kube-controller-manager-minikube   1/1     Running   0          40m
-kube-proxy-2ldqz                   1/1     Running   0          40m
-kube-proxy-75x8c                   1/1     Running   0          40m
-kube-proxy-7bdr4                   1/1     Running   0          40m
-kube-scheduler-minikube            1/1     Running   0          40m
-storage-provisioner                1/1     Running   0          40m
+NAME           CPU(cores)   CPU%   MEMORY(bytes)   MEMORY%   
+minikube       196m         4%     1456Mi          9%        
+minikube-m02   51m          1%     405Mi           2%        
+minikube-m03   44m          1%     357Mi           2%        
 ----
 
 === Contextos
