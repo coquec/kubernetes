@@ -64,14 +64,16 @@ nodos tienen:
 * Un _runtime_ para ejecutar los contenedores, como Docker, containerd, CRI-O,
   rktlet...
 
-=== Instalación de un cluster de pruebas
+== Instalación de un cluster de pruebas
 
 Podemos instalar un cluster de K8s en un equipo con Linux y Docker o Podman
 (para contenedores _rootless_), utilizando herramientas como
 https://kind.sigs.k8s.io/[kind] o https://minikube.sigs.k8s.io[minikube].  Kind
 funciona mejor con Podman, pero solo crea clusters con un nodo.  Para mis
-pruebas, utilizaré `minikube` con Docker, con un nodo master y dos adicionales,
+pruebas, utilizaré minikube con Docker, con un nodo master y dos adicionales,
 todo ello corriendo en una distribución Debian Sid..
+
+=== Instalación de minikube sobre docker
 
 Instalamos Docker desde los repositorios de Debian:
 
@@ -108,10 +110,10 @@ Server:
   GitCommit:        1.1.1+ds1-1+b1
  docker-init:
   Version:          0.19.0
-  GitCommit:        
+  GitCommit:
 ----
 
-Descargamos e instalamos el paquete de Debian de `minikube`, que solo tiene el
+Descargamos e instalamos el paquete de Debian de minikube, que solo tiene el
 ejecutable.
 
 [source,console]
@@ -122,10 +124,10 @@ $ curl -LO https://storage.googleapis.com/minikube/releases/latest/minikube_late
                                  Dload  Upload   Total   Spent    Left  Speed
 100 23.2M  100 23.2M    0     0  11.8M      0  0:00:01  0:00:01 --:--:-- 11.8M
 
-$ dpkg -I minikube_latest_amd64.deb 
+$ dpkg -I minikube_latest_amd64.deb
  new Debian package, version 2.0.
  size 24363252 bytes: control archive=407 bytes.
-     406 bytes,    12 lines      control              
+     406 bytes,    12 lines      control
  Package: minikube
  Version: 1.25.2-0
  Section: base
@@ -136,7 +138,7 @@ $ dpkg -I minikube_latest_amd64.deb
  Description: Minikube
   minikube is a tool that makes it easy to run Kubernetes locally.
   minikube runs a single-node Kubernetes cluster inside a VM on your
-  laptop for users looking to try out Kubernetes or develop with it 
+  laptop for users looking to try out Kubernetes or develop with it
   day-to-day.
 
 $ sudo dpkg -i minikube_latest_amd64.deb
@@ -202,15 +204,16 @@ $ minikube start --kubernetes-version=latest --driver=docker --nodes=3
 permitirle conectarse al cluster recién creado.
 
 [[metrics_server,`metrics-server`]]
-==== Instalación de metrics server
+=== Instalación de metrics server
 
 Algunas funciones de K8s, como la obtención de métricas de los pods con
 <<kubectl_top>> o el autoescalado horizontal, necesitan que esté instalado el
 paquete https://github.com/kubernetes-sigs/metrics-server[Kubernetes Metrics
-Server], que se puede desplegar así, siguiendo un apaño documentado
-https://github.com/kubernetes-sigs/metrics-server/issues/196#issuecomment-451061841[aquí]
-para que funcione con `minikube`, que usa certificados digitales autofirmados
-para los `kubelet` de los nodos:
+Server], que se puede desplegar sobre minikube siguiendo un remiendo
+documentado
+https://github.com/kubernetes-sigs/metrics-server/issues/196#issuecomment-451061841[aquí],
+que hace falta porque minikube usa certificados digitales autofirmados para los
+`kubelet` de los nodos:
 
 [source,console]
 ----
@@ -226,14 +229,14 @@ deployment.apps/metrics-server created
 apiservice.apiregistration.k8s.io/v1beta1.metrics.k8s.io created
 ----
 
-==== Instalación de kubectl
+=== Instalación de kubectl
 
 Aunque recomienda definir el alias `kubectl='minikube kubectl --'` para
 utilizar su propio cliente de `kubectl`, para garantizar que usamos la misma
 versión del cliente y del servidor, pero con él
 https://github.com/kubernetes/minikube/issues/12938[no funciona el
 autocompletado].  En Debian, podemos instalar `kubectl` con un snap, aunque la
-versión de Debian es distinta que la que instala `minikube`:
+versión de Debian es distinta que la que instala minikube:
 
 [source,console]
 ----
@@ -265,7 +268,7 @@ serverVersion:
   platform: linux/amd64
 ----
 
-=== API de Kubernetes
+== API de Kubernetes
 
 `kube-apiserver` implementa un servicio API REST que utilizan los usuarios,
 partes del cluster y los componentes externos para interactuar con K8s.  La API
@@ -333,7 +336,169 @@ plane. Utiliza HTTP en claro y no requiere autenticación ni autorización,
 aunque sí que aplican los módulos de control de entrada (_admission control_).
 La dirección segura es la que usamos habitualmente con `kubectl`.
 
-=== Etiquetas
+=== Creación de plantillas YAML
+
+Cada recurso de K8s se puede definir en YAML o en JSON.  Aunque `kubectl` no
+tiene forma directa de crear las plantillas con todas las opciones de un
+recurso, se puede sacar suficiente información con `kubectl explain <recurso>`,
+y generar una base bastante parecida a YAML, y demasiado extensa, con la opción
+`--recursive`:
+
+[source,console]
+----
+$ kubectl explain pod
+KIND:     Pod
+VERSION:  v1
+
+DESCRIPTION:
+     Pod is a collection of containers that can run on a host. This resource is
+     created by clients and scheduled onto hosts.
+
+FIELDS:
+   apiVersion   <string>
+     APIVersion defines the versioned schema of this representation of an
+     object. Servers should convert recognized schemas to the latest internal
+     value, and may reject unrecognized values. More info:
+     https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+
+   kind <string>
+     Kind is a string value representing the REST resource this object
+     represents. Servers may infer this from the endpoint the client submits
+     requests to. Cannot be updated. In CamelCase. More info:
+     https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+
+   metadata     <Object>
+     Standard object's metadata. More info:
+     https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+
+   spec <Object>
+     Specification of the desired behavior of the pod. More info:
+     https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
+...
+
+$ kubectl explain pod.spec
+KIND:     Pod
+VERSION:  v1
+
+RESOURCE: spec <Object>
+
+DESCRIPTION:
+     Specification of the desired behavior of the pod. More info:
+     https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
+
+     PodSpec is a description of a pod.
+
+FIELDS:
+   activeDeadlineSeconds        <integer>
+     Optional duration in seconds the pod may be active on the node relative to
+     StartTime before the system will actively try to mark it failed and kill
+     associated containers. Value must be a positive integer.
+
+   affinity     <Object>
+     If specified, the pod's scheduling constraints
+
+   automountServiceAccountToken <boolean>
+     AutomountServiceAccountToken indicates whether a service account token
+     should be automatically mounted.
+
+   containers   <[]Object> -required-
+     List of containers belonging to the pod. Containers cannot currently be
+     added or removed. There must be at least one container in a Pod. Cannot be
+     updated.
+...
+
+$ kubectl explain pod --recursive
+KIND:     Pod
+VERSION:  v1
+
+DESCRIPTION:
+     Pod is a collection of containers that can run on a host. This resource is
+     created by clients and scheduled onto hosts.
+
+FIELDS:
+   apiVersion   <string>
+   kind <string>
+   metadata     <Object>
+      annotations       <map[string]string>
+      clusterName       <string>
+      creationTimestamp <string>
+      deletionGracePeriodSeconds        <integer>
+      deletionTimestamp <string>
+      finalizers        <[]string>
+      generateName      <string>
+      generation        <integer>
+      labels    <map[string]string>
+      managedFields     <[]Object>
+         apiVersion     <string>
+         fieldsType     <string>
+         fieldsV1       <map[string]>
+         manager        <string>
+         operation      <string>
+         subresource    <string>
+         time   <string>
+      name      <string>
+      namespace <string>
+      ownerReferences   <[]Object>
+         apiVersion     <string>
+         blockOwnerDeletion     <boolean>
+         controller     <boolean>
+         kind   <string>
+         name   <string>
+         uid    <string>
+      resourceVersion   <string>
+      selfLink  <string>
+      uid       <string>
+   spec <Object>
+      activeDeadlineSeconds     <integer>
+      affinity  <Object>
+         nodeAffinity   <Object>
+            preferredDuringSchedulingIgnoredDuringExecution     <[]Object>
+               preference       <Object>
+                  matchExpressions      <[]Object>
+                     key        <string>
+                     operator   <string>
+                     values     <[]string>
+                  matchFields   <[]Object>
+                     key        <string>
+                     operator   <string>
+                     values     <[]string>
+               weight   <integer>
+...
+----
+
+Para los recursos que se pueden crear con `kubectl create`, también se puede
+hacer una prueba de la creación de un objeto con la opción `--dry-run=client`:
+
+[source,console]
+----
+$ kubectl create deployment trospido --image=nginx --dry-run=client -o=yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  creationTimestamp: null
+  labels:
+    app: trospido
+  name: trospido
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trospido
+  strategy: {}
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app: trospido
+    spec:
+      containers:
+      - image: nginx
+        name: nginx
+        resources: {}
+status: {}
+----
+
+== Etiquetas
 
 Todos los objetos de K8s pueden tener etiquetas asociadas (<<label,_labels_>>),
 que se utilizan para agruparlos de forma lógica, pudiéndose utilizar en los
@@ -417,6 +582,483 @@ selector:
 
 Este tipo de seleccionadores admite los operadores `In`, `NotIn`, `Exists`,
 `DoesNotExist`, `Gt` y `Lt`.
+
+== Pods
+
+Un _pod_ (en el sentido de "manada"), es la unidad mínima de proceso de
+Kubernetes.  Consiste en un grupo de contenedores que comparten ciertos
+recursos, como los volúmenes (aunque cada uno tenga su propio _mount
+namespace_), el _namespace_ de red y el de IPC (comunicación entre procesos
+Posix y System V).  El contenido de un pod se lanza en un único nodo, y se
+gestiona como un todo.  Se puede pensar en ellos como en hosts virtuales para
+ejecutar procesos fuertemente acoplados.
+
+Al compartir el _namespace_ de red, todos los procesos de un pod pueden
+comunicarse mediante la dirección IP del localhost (127.0.0.1).  Como comparten
+los números de puertos, es necesario que los contenedores de un pod utilicen
+puertos distintos para prestar sus servicios.
+
+Para comprobar qué _namespaces_ comparten dos procesos que forman parte del
+mismo pod en el cluster de minikube creado antes, lanzamos el siguiente pod:
+
+.pod-2containers.yaml
+[source,yaml]
+----
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod-2containers
+spec:
+  containers:
+  - name: nginx
+    image: nginx
+    ports:
+    - containerPort: 80
+  - name: loop
+    image: nginx
+    command:  ['sh', '-c', 'while true; do date; sleep 10s; done']
+----
+
+[source,console]
+----
+$ kubectl apply -f pod-2containers.yaml
+pod/pod-2containers created
+
+$ kubectl get pods
+NAME               READY   STATUS    RESTARTS   AGE
+pod-2containers   2/2     Running   0          5s
+
+$  ps -ef | grep -iE 'nginx|sleep'
+root     1014754 1014734  0 18:15 ?        00:00:00 nginx: master process nginx -g daemon off;
+systemd+ 1014792 1014754  0 18:15 ?        00:00:00 nginx: worker process
+systemd+ 1014793 1014754  0 18:15 ?        00:00:00 nginx: worker process
+systemd+ 1014794 1014754  0 18:15 ?        00:00:00 nginx: worker process
+systemd+ 1014795 1014754  0 18:15 ?        00:00:00 nginx: worker process
+root     1014841 1014820  0 18:15 ?        00:00:00 sh -c while true; do date; sleep 10s; done
+root     1049523 1014841  0 18:52 ?        00:00:00 sleep 10s
+
+$ pstree -pslT 1014754
+systemd(1)───containerd-shim(12954)───systemd(12978)───containerd-shim(1014734)───nginx(1014754)─┬─nginx(1014792)
+                                                                                                 ├─nginx(1014793)
+                                                                                                 ├─nginx(1014794)
+                                                                                                 └─nginx(1014795)
+
+$ pstree -plT 12978
+systemd(12978)─┬─containerd(13170)
+               ├─containerd-shim(15374)───pause(15394)
+               ├─containerd-shim(15416)───pause(15437)
+               ├─containerd-shim(15465)───kube-proxy(15514)
+               ├─containerd-shim(15494)───kindnetd(15522)
+               ├─containerd-shim(1014591)───pause(1014611)
+               ├─containerd-shim(1014734)───nginx(1014754)─┬─nginx(1014792)
+               │                                           ├─nginx(1014793)
+               │                                           ├─nginx(1014794)
+               │                                           └─nginx(1014795)
+               ├─containerd-shim(1014820)───sh(1014841)───sleep(1088462)
+               ├─dbus-daemon(13166)
+               ├─dockerd(13196)
+               ├─kubelet(14943)
+               ├─sshd(13183)
+               └─systemd-journal(13145)
+
+# diff -y (readlink /proc/1014754/ns/* | psub) (readlink /proc/1014841/ns/* | psub)
+cgroup:[4026534600]                                           | cgroup:[4026534604]
+ipc:[4026534462]                                                ipc:[4026534462]
+mnt:[4026534597]                                              | mnt:[4026534601]
+net:[4026534464]                                                net:[4026534464]
+pid:[4026534599]                                              | pid:[4026534603]
+pid:[4026534599]                                              | pid:[4026534603]
+time:[4026531834]                                               time:[4026531834]
+time:[4026531834]                                               time:[4026531834]
+user:[4026531837]                                               user:[4026531837]
+uts:[4026534598]                                              | uts:[4026534602]
+
+# systemd-cgls -l
+...
+  │     └─kubepods-besteffort-podd9d2bfea_9b77_43db_9741_e5f9ad6a70ec.slice (#99978)
+  │       → trusted.invocation_id: 26cce36417ae4549bf775fb45a9c2bf8
+  │       ├─docker-6b5120debb47b88bef33a471edf1ce451f679587033b44f4fe83ac4e2be5e190.scope … (#100173)
+  │       │ → trusted.delegate: 1
+  │       │ → trusted.invocation_id: 76b501c6ec94475f81fa407e21cfe218
+  │       │ ├─1014841 sh -c while true; do date; sleep 10s; done
+  │       │ └─1068429 sleep 10s
+  │       ├─docker-f34da3d995e1fc06f1d71e22b960e7b4d16fb1cefe71c40c1184229c1f62b0b2.scope … (#100043)
+  │       │ → trusted.delegate: 1
+  │       │ → trusted.invocation_id: 0bfd50d366084aa4828f6ac260afc6aa
+  │       │ └─1014611 /pause
+  │       └─docker-e4d2f81c40fc09a437ba15a3fd4f3da859744d91dd4819283c04e3a8ded0843e.scope … (#100108)
+  │         → trusted.delegate: 1
+  │         → trusted.invocation_id: b1a2b05b1a19412298ae8aa02d06919a
+  │         ├─1014754 nginx: master process nginx -g daemon off;
+  │         ├─1014792 nginx: worker process
+  │         ├─1014793 nginx: worker process
+  │         ├─1014794 nginx: worker process
+  │         └─1014795 nginx: worker process
+...
+----
+
+Como puede verse en las salidas anteriores, y al menos en el caso de un cluster
+de minikube sobre Docker, los contenedores de un mismo pod comparten los
+namespaces de red, IPC, _time_ y _user_ (el que aísla los UID, GID y las
+capacidades de los procesos).  Dentro de la jerarquía de _cgroups_, comparten
+un ancestro común (el `kubepods-besteffort-pod...`), lo que permite gestionar
+los recursos globales asignados a ellos.
+
+Los contenedores de un pod ven como _hostname_ el campo `name` configurado en
+el pod.
+
+[source,console]
+----
+$ kubectl exec pod/pod-2containers -- hostname
+Defaulted container "nginx" out of: nginx, loop
+pod-2containers
+----
+
+=== Ciclo de vida de los pods
+
+Los pods siguen un ciclo de vida bien definido, representado por el campo
+`phase` de su objeto `PodStatus`, que aparece en el apartado `Status:` de la
+salida de `kubectl describe pod`.
+
+Los pods empiezan en estado `Pending` cuando son aceptados por el cluster de
+K8s, y pasan a estado `Running` cuando todos sus contenedores se han creado y
+al menos uno de ellos está corriendo.  Los pod pueden terminar en los estados
+`Succeeded` (todos los contenedores han terminado bien y no deben ser
+reiniciados) o `Failed` (todos los contenedores han terminado, pero al menos
+uno fallando, con un estado distinto de 0 o terminado por el sistema).  También
+pueden estar en estado `Unknown`, si por cualquier razón no se puede obtener su
+estado (por ejemplo, por no poder comunicarse con su nodo).
+
+Los pods son efímeros.  La ejecución de un pod se programa una sola vez en toda
+su vida, asignándole un nodo.  Una vez que se asigna un nodo a un pod, se
+ejecuta en él hasta que termina o se elimina.  Si un nodo falla, se programa la
+finalización de sus pods pasado un tiempo de espera.
+
+Cada pod tiene su propio UID.  Los pods no pueden reasignarse a otros nodos,
+pero pueden sustituirse por otro pod casi idéntico en otro nodo, con su
+propio UID.
+
+==== Estado de los contenedores
+
+Dentro de un pod, los contenedores pasan por los siguientes estados, que pueden
+verse con `kubectl describe pod`:
+
+* `Waiting`, cuando se está preparando el contenedor para que pase a alguno de
+  los otros estados.
+
+* `Running`, cuando el contenedor está funcionando sin problemas.  Si el
+  contenedor tuviera un _hook_ `postStart`, se habrá ejecutado antes de pasar a
+  este estado.
+
+* `Terminated`, cuando un contenedor que ha pasado a estado `Running` termina
+  por cualquier motivo.  Antes de pasar a este estado, se ejecuta cualquier
+  _hook_ `preStop` que tuviera configurado.
+
+[[politica_reinicio,política de reinicio]]
+==== Política de reinicio de los contenedores
+
+`kubelet` es capaz de reiniciar los contenedores de un pod ante cierto tipo de
+fallos y hacer que el pod vuelva a estar saludable (_healthy_).  Esto depende
+de la política `restartPolicy` que tenga configurada el pod, que puede tener
+los valores `Always` (por defecto), `OnFailure` o `Never`.  `kubelet` reinicia
+los contenedores incrementando el tiempo de espera de forma exponencial (10,
+20, 40 segundos...), hasta 5 minutos máximo.  Si un contenedor lleva 10 minutos
+corriendo sin problemas, se reinicia el tiempo de espera a su valor inicial.
+
+==== Condiciones de los pods
+
+El `PodStatus` de los pods tiene un array de condiciones por las que el pod ha
+podido pasar:
+
+* `PodScheduled`, si se le ha asignado un nodo.
+
+* `ContainersReady`, si todos los contenedores del pod están en estado `Ready`.
+
+* `Initialized`, si todos los contenedores de inicialización han terminado
+  correctamente.
+
+* `Ready`, si el pod puede atender peticiones y puede ser añadido a la pila de
+  balanceadores de los `Services` pertinentes.
+
+[source,console]
+----
+$ kubectl describe pod pod-2containers
+Name:         pod-2containers
+Namespace:    blas
+Priority:     0
+Node:         minikube-m03/192.168.49.4
+Start Time:   Mon, 27 Jun 2022 18:18:56 +0200
+Labels:       <none>
+Annotations:  <none>
+Status:       Running
+IP:           10.244.4.2
+IPs:
+  IP:  10.244.4.2
+Containers:
+  nginx:
+    Container ID:   docker://aaac06fcf79aa3f03f077c5043cda90caac73b4781db968593c8ee91fbcd894b
+    Image:          nginx
+    Image ID:       docker-pullable://nginx@sha256:10f14ffa93f8dedf1057897b745e5ac72ac5655c299dade0aa434c71557697ea
+    Port:           80/TCP
+    Host Port:      0/TCP
+    State:          Running
+      Started:      Mon, 27 Jun 2022 18:18:59 +0200
+    Ready:          True
+    Restart Count:  0
+    Environment:    <none>
+    Mounts:
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-47sbt (ro)
+  loop:
+    Container ID:  docker://c4bf74188ceeaa6ae14cab8ecf0c4ad7356ed744870e68fb35894dee3e88aaf8
+    Image:         nginx
+    Image ID:      docker-pullable://nginx@sha256:10f14ffa93f8dedf1057897b745e5ac72ac5655c299dade0aa434c71557697ea
+    Port:          <none>
+    Host Port:     <none>
+    Command:
+      sh
+      -c
+      while true; do date; sleep 10s; done
+    State:          Running
+      Started:      Mon, 27 Jun 2022 18:19:00 +0200
+    Ready:          True
+    Restart Count:  0
+    Environment:    <none>
+    Mounts:
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-47sbt (ro)
+Conditions:
+  Type              Status
+  Initialized       True
+  Ready             True
+  ContainersReady   True
+  PodScheduled      True
+Volumes:
+  kube-api-access-47sbt:
+    Type:                    Projected (a volume that contains injected data from multiple sources)
+    TokenExpirationSeconds:  3607
+    ConfigMapName:           kube-root-ca.crt
+    ConfigMapOptional:       <nil>
+    DownwardAPI:             true
+QoS Class:                   BestEffort
+Node-Selectors:              <none>
+Tolerations:                 node.kubernetes.io/not-ready:NoExecute op=Exists for 300s
+                             node.kubernetes.io/unreachable:NoExecute op=Exists for 300s
+Events:                      <none>
+----
+
+==== Condiciones personalizadas (readinessGates)
+
+Podemos añadir a los pods condiciones adicionales que `kubelet` puede utilizar
+para determinar si están listos para recibir peticiones o no, usando
+`readinessGates`:
+
+[source,yaml]
+----
+kind: Pod
+...
+spec:
+  readinessGates:
+    - conditionType: "BalancerReady"
+status:
+  conditions:
+    - type: "BalancerReady"
+      status: "False"
+      lastProbeTime: null
+      lastTransitionTime: 2022-01-01T00:00:00Z
+...
+----
+
+Se trata de condiciones cuyo valor se actualiza mediante la API e K8s, no desde
+dentro del pod.  Por ejemplo, podemos utilizar un programa externo que
+compruebe si un balanceador externo está listo para enviar tráfico a un pod y
+utilice la API para actualizar el estado de esa condición.  Se puede ver un
+ejemplo de cómo hacer esto
+https://towardsdatascience.com/improving-application-availability-with-pod-readiness-gates-4ebebc3fb28a[aquí].
+
+Los pods que tengan condiciones personalizadas solo estarán en estado `Ready`
+cuando todos sus contenedores estén `Ready` y el `status` de todas sus
+`readinessGates` sea `True`.  Si lo primero fuera cierto pero lo segundo no, el
+estado del pod sería `ContainersReady`.
+
+==== Pruebas de estado
+
+Podemos configurar hasta tres pruebas distintas que `kubelet` puede hacer sobre
+los contenedores de un pod:
+
+* `livenessProbe`, que indica si el contenedor está funcionando.  Si esta
+  prueba falla, `kubelet` elimina el contenedor y se aplica su
+  <<politica_reinicio>>.  Si no se personaliza esta prueba, por defecto se
+  considera que está en estado `Success`.
+
+* `readinessProbe`, que determina si el contenedor está listo para atender
+  peticiones.  Si la prueba falla, el controlador de _endpoints_ quita la
+  dirección IP del pod de los endpoints de todos los servicios que coincidan
+  con el pod.  El estado de esta prueba es `Failure` durante la pausa inicial
+  que haya configurada, pasando después a `Success` si no se personaliza la
+  prueba.  Se considera que un pod está listo para atender peticiones cuando
+  todos sus contenedores están listos.
+
+* `startupProbe`, que determina si la aplicación del contenedor ha arrancado.
+  Si se personaliza esta prueba, las otras dos pruebas se mantienen
+  deshabilitadas hasta que esta se pasa.  Si la prueba falla, `kubelet` mata el
+  contenedor y se le aplica la <<politica_reinicio>> que tenga configurada.  Si
+  no se personaliza esta prueba, por defecto se considera que está en estado
+  `Success`.
+
+`kubelet` es el encargado de lanzar las pruebas, que pueden ser de los
+siguientes tipos:
+
+* `exec`, que ejecuta una orden dentro del contenedor, y se supera si
+  devuelve 0.
+
+* `httpGet`, que lanza un HTTP GET contra la URL especificada, y se pasa si se
+  devuelve un código HTTP mayor o igual que 200 y menor que 400.  En versiones
+  de K8s anteriores o iguales a la 1.13, `kubelet` utilizará el proxy
+  configurado en las variables de entorno `http_proxy` o `HTTP_PROXY` del nodo
+  para comunicarse con el contenedor, pero a partir de esa versión lo hará
+  directamente.
+
+* `tcpSocket`, que abre una conexión TCP contra el puerto especificado.  La
+  prueba se pasa si el puerto está abierto.
+
+* `grpc`, que utiliza llamadas a procedimiento remoto https://grpc.io/[gRPC].
+  Por el momento, esto está en estado alpha.  Este tipo de pruebas está
+  disponible a partir de la versión 1.24 de K8s.
+
+El resultado de cualquiera de las pruebas anteriores puede ser `Success`, si se
+pasan, `Failure`, si no se pasan, o `Unknown` si ha habido problemas para
+lanzar la prueba, en cuyo caso se seguirá intentando.
+
+Se puede modificar el comportamiento de las distintas pruebas de estado a
+través de los siguientes parámetros:
+
+* `initialDelaySeconds`, que por defecto es 0.  Es el número de segundos a
+  esperar desde que el contenedor arranca para empezar a lanzar las pruebas.
+  No aplica a `startupProbe`.
+
+* `periodSeconds`, que por defecto es 10s.  Cada cuánto se ejecuta la prueba.
+
+* `timeoutSeconds`, que por defecto es 1s.  Tiempo máximo de espera para
+  obtener un resultado de la prueba.
+
+* `successThreshold`, que por defecto es 1.  Número de pruebas correctas
+  consecutivas necesario para considerar que el contenedor pasa la prueba,
+  después de haber fallado.
+
+* `failureThreshold`, que *por defecto es 3*.  Número de reintentos que hace
+  K8s cuando una prueba falla, antes de abandonar y actuar en consecuencia.
+
+Además, las pruebas `httpGet` admiten los siguientes parámetros:
+
+* `host`, que por defecto es la IP del pod.  Es el nombre del host al que
+  lanzar las pruebas.  Si se quiere cambiar el host de la cabecera HTTP, es
+  mejor cambiar la cabecera `Host` con `httpHeaders`.
+
+* `scheme`, que por defecto es HTTP, pero podemos cambiarlo a HTTPS.  *No se
+  valida el certificado*.
+
+* `path`, que por defecto es `/`.  Tiene la parte de ruta de la URL a usar.
+
+* `httpHeaders`, con las cabeceras HTTP que queramos personalizar.  Por
+  defecto, se envían las cabeceras `User-Agent: kube-probe/1.24` y `Accept:
+  \*/*`.
+
+* `port`, con el número de puerto del servidor.
+
+En el siguiente ejemplo, lanzamos un pod con dos contenedores, y configuramos
+en uno de ellos una prueba que falla aproximadamente el 10% de las veces,
+además de configurar el valor `failureThreshold` a 1 para reiniciar el
+contenedor en cuanto se detecte un fallo:
+
+.pod-2containers-lp.yaml
+[source,yaml]
+----
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod-2containers-lp
+spec:
+  containers:
+  - name: nginx
+    image: nginx
+    ports:
+    - containerPort: 80
+  - name: loop
+    image: nginx
+    command:  ['sh', '-c', 'while true; do date; sleep 10s; done']
+    livenessProbe:
+     exec:
+       command:
+       - bash
+       - -c
+       - f() { return $(($RANDOM % 10 < 1)); }; f
+     initialDelaySeconds: 5
+     periodSeconds: 5
+     failureThreshold: 1
+----
+
+Una vez aplicada esa configuración, vemos cómo el contenedor se reinicia cada
+vez que falla:
+
+[source,console]
+----
+$ kubectl get events --field-selector involvedObject.name=pod-2containers-lp -o custom-columns=LATSEEN:.lastTimestamp,COUNT:.count,TYPE:.type,REASON:.reason,OBJECT:.involvedObject.name,MESSAGE:.message --watch
+LATSEEN                COUNT   TYPE      REASON      OBJECT               MESSAGE
+2022-07-07T15:31:07Z   1       Normal    Scheduled   pod-2containers-lp   Successfully assigned blas/pod-2containers-lp to minikube-m02
+2022-07-07T15:31:08Z   1       Normal    Pulling     pod-2containers-lp   Pulling image "nginx"
+2022-07-07T15:31:09Z   1       Normal    Pulled      pod-2containers-lp   Successfully pulled image "nginx" in 1.333973436s
+2022-07-07T15:31:10Z   1       Normal    Created     pod-2containers-lp   Created container nginx
+2022-07-07T15:31:10Z   1       Normal    Started     pod-2containers-lp   Started container nginx
+2022-07-07T15:31:10Z   1       Normal    Pulling     pod-2containers-lp   Pulling image "nginx"
+2022-07-07T15:31:11Z   1       Normal    Pulled      pod-2containers-lp   Successfully pulled image "nginx" in 1.405459696s
+2022-07-07T15:31:11Z   1       Normal    Created     pod-2containers-lp   Created container loop
+2022-07-07T15:31:11Z   1       Normal    Started     pod-2containers-lp   Started container loop
+2022-07-07T15:31:17Z   1       Warning   Unhealthy   pod-2containers-lp   Liveness probe failed:
+2022-07-07T15:31:17Z   1       Normal    Killing     pod-2containers-lp   Container loop failed liveness probe, will be restarted
+2022-07-07T15:31:48Z   2       Normal    Pulling     pod-2containers-lp   Pulling image "nginx"
+2022-07-07T15:31:49Z   1       Normal    Pulled      pod-2containers-lp   Successfully pulled image "nginx" in 1.371456844s
+2022-07-07T15:31:49Z   2       Normal    Created     pod-2containers-lp   Created container loop
+2022-07-07T15:31:49Z   2       Normal    Started     pod-2containers-lp   Started container loop
+2022-07-07T15:31:57Z   2       Warning   Unhealthy   pod-2containers-lp   Liveness probe failed:
+2022-07-07T15:31:57Z   2       Normal    Killing     pod-2containers-lp   Container loop failed liveness probe, will be restarted
+2022-07-07T15:32:28Z   3       Normal    Pulling     pod-2containers-lp   Pulling image "nginx"
+2022-07-07T15:32:29Z   1       Normal    Pulled      pod-2containers-lp   Successfully pulled image "nginx" in 1.34310106s
+2022-07-07T15:32:29Z   3       Normal    Created     pod-2containers-lp   Created container loop
+2022-07-07T15:32:29Z   3       Normal    Started     pod-2containers-lp   Started container loop
+2022-07-07T15:33:17Z   3       Warning   Unhealthy   pod-2containers-lp   Liveness probe failed:
+2022-07-07T15:33:17Z   3       Normal    Killing     pod-2containers-lp   Container loop failed liveness probe, will be restarted
+2022-07-07T15:33:48Z   4       Normal    Pulling     pod-2containers-lp   Pulling image "nginx"
+2022-07-07T15:33:49Z   1       Normal    Pulled      pod-2containers-lp   Successfully pulled image "nginx" in 1.327867822s
+2022-07-07T15:33:49Z   4       Normal    Created     pod-2containers-lp   Created container loop
+2022-07-07T14:34:20Z   8       Normal    Pulling     pod-2containers-lp   Pulling image "nginx"
+2022-07-07T15:36:13Z   6       Normal    Pulling     pod-2containers-lp   Pulling image "nginx"
+2022-07-07T15:41:19Z   8       Normal    Pulling     pod-2containers-lp   Pulling image "nginx"
+2022-07-07T15:46:19Z   1       Warning   BackOff     pod-2containers-lp   Back-off restarting failed container
+----
+
+[source,console]
+----
+$ kubectl get pod pod-2containers-lp --watch
+NAME                 READY   STATUS              RESTARTS   AGE
+pod-2containers-lp   0/2     Pending             0             0s
+pod-2containers-lp   0/2     Pending             0             0s
+pod-2containers-lp   0/2     ContainerCreating   0             0s
+pod-2containers-lp   2/2     Running             0             5s
+pod-2containers-lp   2/2     Running             1 (2s ago)    43s
+pod-2containers-lp   2/2     Running             2 (1s ago)    82s
+pod-2containers-lp   2/2     Running             3 (1s ago)    2m42s
+pod-2containers-lp   2/2     Running             4 (2s ago)    4m18s
+pod-2containers-lp   2/2     Running             5 (1s ago)    5m7s
+pod-2containers-lp   2/2     Running             6 (2s ago)    6m43s
+pod-2containers-lp   1/2     CrashLoopBackOff    6 (1s ago)    7m32s
+pod-2containers-lp   2/2     Running             7 (2m43s ago)   10m
+pod-2containers-lp   2/2     Running             8 (2s ago)      12m
+pod-2containers-lp   1/2     CrashLoopBackOff    8 (1s ago)      13m
+----
+
+El estado `CrashLoopBackOff` indica que uno de los pods está fallando
+intermitentemente y debe investigarse la causa.
 
 == Control de los trabajos
 
@@ -575,7 +1217,6 @@ metadata:
   resourceVersion: "20754"
   uid: 279d249e-668a-4968-80fd-01a45942f805
 ...
-...
 ----
 
 Si un nuevo pod cumple con el seleccionador de un _replica set_, será adquirido
@@ -618,7 +1259,7 @@ $ kubectl get events --watch
 0s          Normal    Pulled             pod/new-pod           Successfully pulled image "nginx" in 1.452625358s
 0s          Normal    Created            pod/new-pod           Created container new-nginx
 0s          Normal    Started            pod/new-pod           Started container new-nginx
-0s          Normal    Killing            pod/new-pod           Stopping container new-nginx 
+0s          Normal    Killing            pod/new-pod           Stopping container new-nginx
 ----
 
 [source,console]
@@ -681,7 +1322,6 @@ IPs:
   IP:           10.244.2.10
 Controlled By:  ReplicaSet/nginx-rs
 ...
-...
 ----
 
 Si eliminamos cualquiera de los pods controlados por el _replica set_, se
@@ -707,8 +1347,8 @@ a 0 para terminarlos, y después se elimina el propio _replica set_:
 
 [source,console]
 ----
-$ kubectl delete rc/nginx
-replicationcontroller "nginx" deleted
+$ kubectl delete replicaset/nginx-rs
+replicaset.apps "nginx-rs" deleted
 
 $ kubectl get pods
 No resources found in blas namespace.
@@ -833,7 +1473,7 @@ spec:
         - containerPort: 80
 ----
 
-Al ejecutarlo, se crea el `Deployment`, los pods y el <<replicasets,_replica
+Al aplicarlo, se crea el `Deployment`, los pods y el <<replicasets,_replica
 set_>> que los gestiona:
 
 [source,console]
@@ -865,9 +1505,8 @@ nginx-deployment   3/3     3            3           35s
 
 Los pods y los <<replicasets>> gestionados con despliegues tienen en sus
 nombres el valor de la etiqueta `pod-template-hash` que el despliegue incluye
-en ellos.  Esta etiqueta se calcula haciendo un hash del `PodTemplate` y
-utilizándolo como semilla para generar un valor aleatorio, que es el que se
-incluye en la etiqueta:
+en ellos.  Esta etiqueta es un número aleatorio calculado usando como semilla
+el hash del `PodTemplate`:
 
 [source,console]
 ----
@@ -880,7 +1519,6 @@ Node:         minikube-m03/192.168.49.4
 Start Time:   Mon, 20 Jun 2022 12:46:37 +0200
 Labels:       app=nginx
               pod-template-hash=74d589986c
-...
 ...
 ----
 
@@ -901,15 +1539,26 @@ ellos.
 
 ==== Actualización de un despliegue
 
-Si se cambia la plantilla de los pods del despliegue, se invoca un _rollout_,
-creando nuevos pods con la nueva plantilla y eliminando los antiguos por
-tandas, hasta sustituirlos todos.  Por defecto, y siempre sin contar los pods
-que estén en estado _terminating_, se permite tener hasta un 125% más de pods
-que el máximo permitido (un 25% de aumento), y se garantiza que al menos se
-tiene un 75% del número deseado levantados (un 25% no disponible).
+Cuando se cambia la plantilla de los pods de un despliegue, se lanza el
+despliegue para aplicar los cambios (se hace un _rollout_).  La forma de
+aplicar los cambios depende de la estrategia configurada en el campo
+`.spec.strategy` del despliegue, que puede ser `Recreate` o `RollingUpdate`,
+que es el valor por defecto.
 
-NOTE: Parece que los `ReplicaSet` creados por los despliegues no se eliminan,
-solo se fija su número de pods a 0.
+Con la estrategia `Recreate`, primero se eliminan todos los pods actuales y
+después se crean los nuevos.  Esto no es muy recomendable, porque si falla la
+creación de los nuevos pods nos quedaremos sin servicio.
+
+La estrategia `RollingUpdate` crea nuevos pods con la nueva plantilla y elimina
+los antiguos por tandas, hasta sustituirlos todos.  Por defecto, y siempre sin
+contar los pods que estén en estado _terminating_, se permite tener hasta un
+125% más de pods que el máximo permitido (un 25% de aumento), y se garantiza
+que al menos se tiene un 75% del número deseado levantados (un 25% no
+disponible).  Estos valores pueden configurarse en los campos
+`.spec.strategy.rollingUpdate.maxUnavailable` y
+`.spec.strategy.rollingUpdate.maxSurge` del despliegue, que pueden ser valores
+absolutos o porcentajes sobre el número de pods deseados, que se redondean
+hacia abajo o hacia arriba, respectivamente, para calcular el valor final.
 
 Las siguientes salidas se han obtenido justo después de editar la definición
 del despliegue anterior para añadir una etiqueta en los pods.  Atención a cómo
@@ -917,63 +1566,61 @@ cambia el nombre de las etiquetas de los nuevos recursos creados:
 
 [source,console]
 ----
-jcouto@bazo ~> kubectl get pods
+$ kubectl get pods
 NAME                                READY   STATUS    RESTARTS   AGE
 nginx-deployment-74d589986c-c287l   1/1     Running   0          9m21s
 nginx-deployment-74d589986c-fgz2b   1/1     Running   0          9m24s
 nginx-deployment-74d589986c-qtwlc   1/1     Running   0          9m18s
-jcouto@bazo ~> kubectl get pods
+$ kubectl get pods
 NAME                                READY   STATUS              RESTARTS   AGE
 nginx-deployment-74d589986c-c287l   1/1     Running             0          9m36s
 nginx-deployment-74d589986c-fgz2b   1/1     Running             0          9m39s
 nginx-deployment-74d589986c-qtwlc   1/1     Running             0          9m33s
 nginx-deployment-795bc797c7-xjh4p   0/1     ContainerCreating   0          2s
-jcouto@bazo ~> kubectl get pods
+$ kubectl get pods
 NAME                                READY   STATUS        RESTARTS   AGE
 nginx-deployment-74d589986c-c287l   1/1     Terminating   0          9m37s
 nginx-deployment-74d589986c-fgz2b   1/1     Running       0          9m40s
 nginx-deployment-74d589986c-qtwlc   1/1     Running       0          9m34s
 nginx-deployment-795bc797c7-xjh4p   1/1     Running       0          3s
-jcouto@bazo ~> kubectl get pods
+$ kubectl get pods
 NAME                                READY   STATUS              RESTARTS   AGE
 nginx-deployment-74d589986c-fgz2b   1/1     Running             0          9m41s
 nginx-deployment-74d589986c-qtwlc   1/1     Running             0          9m35s
 nginx-deployment-795bc797c7-q7x74   0/1     ContainerCreating   0          1s
 nginx-deployment-795bc797c7-xjh4p   1/1     Running             0          4s
-jcouto@bazo ~> kubectl get pods
-
+$ kubectl get pods
 NAME                                READY   STATUS              RESTARTS   AGE
 nginx-deployment-74d589986c-fgz2b   1/1     Running             0          9m43s
 nginx-deployment-74d589986c-qtwlc   1/1     Running             0          9m37s
 nginx-deployment-795bc797c7-q7x74   0/1     ContainerCreating   0          3s
 nginx-deployment-795bc797c7-xjh4p   1/1     Running             0          6s
-jcouto@bazo ~> 
-jcouto@bazo ~> kubectl get pods
+$ kubectl get pods
 NAME                                READY   STATUS              RESTARTS   AGE
 nginx-deployment-74d589986c-fgz2b   1/1     Terminating         0          9m44s
 nginx-deployment-74d589986c-qtwlc   1/1     Running             0          9m38s
 nginx-deployment-795bc797c7-nmst8   0/1     ContainerCreating   0          1s
 nginx-deployment-795bc797c7-q7x74   1/1     Running             0          4s
 nginx-deployment-795bc797c7-xjh4p   1/1     Running             0          7s
-jcouto@bazo ~> kubectl get pods
+$ kubectl get pods
 NAME                                READY   STATUS              RESTARTS   AGE
 nginx-deployment-74d589986c-qtwlc   1/1     Running             0          9m39s
 nginx-deployment-795bc797c7-nmst8   0/1     ContainerCreating   0          2s
 nginx-deployment-795bc797c7-q7x74   1/1     Running             0          5s
 nginx-deployment-795bc797c7-xjh4p   1/1     Running             0          8s
-jcouto@bazo ~> kubectl get pods
+$ kubectl get pods
 NAME                                READY   STATUS        RESTARTS   AGE
 nginx-deployment-74d589986c-qtwlc   1/1     Terminating   0          9m40s
 nginx-deployment-795bc797c7-nmst8   1/1     Running       0          3s
 nginx-deployment-795bc797c7-q7x74   1/1     Running       0          6s
 nginx-deployment-795bc797c7-xjh4p   1/1     Running       0          9s
-jcouto@bazo ~> kubectl get pods
+$ kubectl get pods
 NAME                                READY   STATUS    RESTARTS   AGE
 nginx-deployment-795bc797c7-nmst8   1/1     Running   0          4s
 nginx-deployment-795bc797c7-q7x74   1/1     Running   0          7s
 nginx-deployment-795bc797c7-xjh4p   1/1     Running   0          10s
 
-jcouto@bazo ~> kubectl get rs
+$ kubectl get rs
 NAME                          DESIRED   CURRENT   READY   AGE
 nginx-deployment-74d589986c   0         0         0       3h58m
 nginx-deployment-795bc797c7   3         3         3       42s
@@ -1026,20 +1673,46 @@ Events:
 
 Si deshacemos el cambio, la plantilla del pod vuelve a quedar como estaba, y el
 valor del campo `pod-template-hash` de los nuevos recursos que se crean como
-parte del _rollout_ coincide con el que teníamos originalmente.
+parte del lanzamiento del despliegue coincide con el que teníamos
+originalmente.
 
 ==== Historia de los despliegues
 
-K8s guarda la historia de los rollouts hechos con un despliegue:
+K8s guarda la historia de los lanzamientos hechos con un despliegue,
+conservando los <<replicasets>> correspondientes:
 
 [source,console]
 ----
 $ kubectl rollout history deployment/nginx-deployment
-deployment.apps/nginx-deployment 
+deployment.apps/nginx-deployment
 REVISION  CHANGE-CAUSE
 2         <none>
 5         <none>
 6         <none>
+----
+
+La columna `CHANGE-CAUSE` se obtiene del campo `kubernetes.io/change-cause` del
+despliegue, que se puede establecer añadiendo la opción `--record` a la orden
+`kubectl` que provocó el cambio, en cuyo caso se guardará la orden en la
+descripción del cambio, o cambiando la anotación de la versión actual del
+despliegue con `kubectl annotate deployment/XXXXX
+kubernetes.io/change-cause="blablabla"`.
+
+Por defecto, se guardan 10 versiones, pero se puede cambiar este valor
+cambiando el campo del despliegue `.spec.revisionHistoryLimit`:
+
+[source,console]
+----
+$ kubectl get deploy/nginx-deployment -o yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+...
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 3
+  revisionHistoryLimit: 10
+...
 ----
 
 Se puede ver cómo es cada versión añadiendo la opción `--revision=<n>`.  En
@@ -1112,7 +1785,7 @@ nuevas versiones de la historia:
 [source,console]
 ----
 $ kubectl rollout history deployment/nginx-deployment
-deployment.apps/nginx-deployment 
+deployment.apps/nginx-deployment
 REVISION  CHANGE-CAUSE
 2         <none>
 10        <none>
@@ -1122,7 +1795,7 @@ $ kubectl scale deployment/nginx-deployment --replicas=10
 deployment.apps/nginx-deployment scaled
 
 $ kubectl rollout history deployment/nginx-deployment
-deployment.apps/nginx-deployment 
+deployment.apps/nginx-deployment
 REVISION  CHANGE-CAUSE
 2         <none>
 10        <none>
@@ -1142,84 +1815,206 @@ nginx-deployment-74d589986c-v8kdw   1/1     Running   0          15s
 nginx-deployment-74d589986c-xg2jl   1/1     Running   0          4m20s
 ----
 
-=== ReplicationControllers
+Si tenemos habilitado el autoescalado horizontal en el cluster, se puede
+configurar un autoescalado basado en el consumo de CPU:
 
-Los _replication controllers_ (`ReplicationController`), tienen una función
-similar a las de los <<replicasets>>.
-
-NOTE: En la actualidad es preferible utilizar <<deployments>> o <<replicasets>>.
-
-La siguiente configuración garantiza que hay tres instancias de `nginx`
-corriendo en nuestro cluster:
-
-.rc-ngix.yaml
-[source,yaml]
+[source,console]
 ----
-apiVersion: v1
-kind: ReplicationController
+$ kubectl autoscale deployment/nginx-deployment --min=3 --max=10 --cpu-percent=2
+horizontalpodautoscaler.autoscaling/nginx-deployment autoscaled
+
+$ kubectl get horizontalpodautoscalers.autoscaling
+NAME               REFERENCE                     TARGETS        MINPODS   MAXPODS   REPLICAS   AGE
+nginx-deployment   Deployment/nginx-deployment   <unknown>/2%   3         10        3          43s
+----
+
+Como puede verse, la orden anterior crea un `HorizontalPodAutoscaler`
+(abreviado, `hpa`), del que podemos ver los detalles con `kubectl get`, en YAML
+o en JSON:
+
+[source,console]
+----
+$ kubectl get hpa nginx-deployment -o=yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
 metadata:
-  name: nginx
+  creationTimestamp: "2022-06-21T15:24:36Z"
+  name: nginx-deployment
+  namespace: blas
+  resourceVersion: "64059"
+  uid: 3652214e-da75-4848-aa3e-ef4b59a181f0
 spec:
-  replicas: 3
-  selector:
-    app: nginx
-  template:
-    metadata:
-      name: nginx
-      labels:
-        app: nginx
-    spec:
-      containers:
-      - name: nginx
-        image: nginx
-        ports:
-        - containerPort: 80
+  maxReplicas: 10
+  metrics:
+  - resource:
+      name: cpu
+      target:
+        averageUtilization: 2
+        type: Utilization
+    type: Resource
+  minReplicas: 3
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: nginx-deployment
+status:
+  conditions:
+  - lastTransitionTime: "2022-06-21T15:24:51Z"
+    message: the HPA controller was able to get the target's current scale
+    reason: SucceededGetScale
+    status: "True"
+    type: AbleToScale
+  - lastTransitionTime: "2022-06-21T15:24:51Z"
+    message: 'the HPA was unable to compute the replica count: failed to get cpu utilization:
+      missing request for cpu'
+    reason: FailedGetResourceMetric
+    status: "False"
+    type: ScalingActive
+  currentMetrics: null
+  currentReplicas: 3
+  desiredReplicas: 0
 ----
 
 [source,console]
 ----
-$ kubectl apply -f rc-nginx.yaml
-replicationcontroller/nginx created
+$ kubectl get horizontalpodautoscalers/nginx-deployment -o=json
+{
+    "apiVersion": "autoscaling/v2",
+    "kind": "HorizontalPodAutoscaler",
+    "metadata": {
+        "creationTimestamp": "2022-06-21T15:24:36Z",
+        "name": "nginx-deployment",
+        "namespace": "blas",
+        "resourceVersion": "64059",
+        "uid": "3652214e-da75-4848-aa3e-ef4b59a181f0"
+    },
+    "spec": {
+        "maxReplicas": 10,
+        "metrics": [
+            {
+                "resource": {
+                    "name": "cpu",
+                    "target": {
+                        "averageUtilization": 2,
+                        "type": "Utilization"
+                    }
+                },
+                "type": "Resource"
+            }
+        ],
+        "minReplicas": 3,
+        "scaleTargetRef": {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "name": "nginx-deployment"
+        }
+    },
+    "status": {
+        "conditions": [
+            {
+                "lastTransitionTime": "2022-06-21T15:24:51Z",
+                "message": "the HPA controller was able to get the target's current scale",
+                "reason": "SucceededGetScale",
+                "status": "True",
+                "type": "AbleToScale"
+            },
+            {
+                "lastTransitionTime": "2022-06-21T15:24:51Z",
+                "message": "the HPA was unable to compute the replica count: failed to get cpu utilization: missing request for cpu",
+                "reason": "FailedGetResourceMetric",
+                "status": "False",
+                "type": "ScalingActive"
+            }
+        ],
+        "currentMetrics": null,
+        "currentReplicas": 3,
+        "desiredReplicas": 0
+    }
+}
+----
 
-$ kubectl get replicationcontroller
-NAME    DESIRED   CURRENT   READY   AGE
-nginx   3         3         0       19s
+Podemos cambiar los parámetros del autoescalador en JSON:
 
-$ kubectl get rc
-NAME    DESIRED   CURRENT   READY   AGE
-nginx   3         3         0       23s
-
-$ kubectl describe rc/nginx
-Name:         nginx
-Namespace:    blas
-Selector:     app=nginx
-Labels:       app=nginx
-Annotations:  <none>
-Replicas:     3 current / 3 desired
-Pods Status:  3 Running / 0 Waiting / 0 Succeeded / 0 Failed
-Pod Template:
-  Labels:  app=nginx
-  Containers:
-   nginx:
-    Image:        nginx
-    Port:         80/TCP
-    Host Port:    0/TCP
-    Environment:  <none>
-    Mounts:       <none>
-  Volumes:        <none>
-Events:
-  Type    Reason            Age    From                    Message
-  ----    ------            ----   ----                    -------
-  Normal  SuccessfulCreate  2m36s  replication-controller  Created pod: nginx-6w895
-  Normal  SuccessfulCreate  2m36s  replication-controller  Created pod: nginx-m6ltm
-  Normal  SuccessfulCreate  2m36s  replication-controller  Created pod: nginx-9t42r
+[source,console]
+----
+$ kubectl patch hpa nginx-deployment --patch '{"spec":{"minReplicas":5}}'
+horizontalpodautoscaler.autoscaling/nginx-deployment patched
 
 $ kubectl get pods
-NAME          READY   STATUS    RESTARTS   AGE
-nginx-6w895   1/1     Running   0          67s
-nginx-9t42r   1/1     Running   0          67s
-nginx-m6ltm   1/1     Running   0          67s
+NAME                                READY   STATUS    RESTARTS   AGE
+nginx-deployment-74d589986c-26ch9   1/1     Running   0          8s
+nginx-deployment-74d589986c-fgz2t   1/1     Running   0          24m
+nginx-deployment-74d589986c-ngph9   1/1     Running   0          24m
+nginx-deployment-74d589986c-p7q86   1/1     Running   0          24m
+nginx-deployment-74d589986c-r6dlq   1/1     Running   0          8s
 ----
+
+==== Escalado proporcional
+
+Si pidiéramos escalar un despliegue que estuviera en mitad de un lanzamiento,
+por ejemplo, incrementando el número de réplicas deseadas, las nuevas
+instancias se repartirían entre los `ReplicaSet` que estuvieran activos de
+manera proporcional al número de réplicas deseado en cada uno de ellos.  A esto
+se le llama _proportional scaling_:
+
+[source,console]
+----
+$ kubectl get deployments
+No resources found in blas namespace.
+
+$ kubectl apply -f dep-nginx.yaml
+deployment.apps/nginx-deployment created
+
+$ kubectl get deployments
+NAME               READY   UP-TO-DATE   AVAILABLE   AGE
+nginx-deployment   3/3     3            3           8s
+
+$ kubectl get rs
+NAME                          DESIRED   CURRENT   READY   AGE
+nginx-deployment-74d589986c   3         3         3       17s
+
+$ kubectl scale deployment nginx-deployment --replicas=10
+deployment.apps/nginx-deployment scaled
+
+$ kubectl get rs
+NAME                          DESIRED   CURRENT   READY   AGE
+nginx-deployment-74d589986c   10        10        10      57s
+
+$ # Actualizamos el despliegue con una imagen que no existe para mantener
+$ # activos dos ReplicaSets.
+$ kubectl set image deployment/nginx-deployment nginx=nginx:blas
+deployment.apps/nginx-deployment image updated
+
+$ kubectl get deployments
+NAME               READY   UP-TO-DATE   AVAILABLE   AGE
+nginx-deployment   8/10    5            8           91s
+
+$ # Vemos los dos ReplicaSets activos, el antiguo con más réplicas deseadas
+$ # que el nuevo, por estar en mitad de un rollout.
+$ kubectl get rs
+NAME                          DESIRED   CURRENT   READY   AGE
+nginx-deployment-74d589986c   8         8         8       95s
+nginx-deployment-dd56879bf    5         5         0       16s
+
+$ # Subimos el número de réplicas deseadas del despliegue a 20.
+$ kubectl scale deployment nginx-deployment --replicas=20
+deployment.apps/nginx-deployment scaled
+
+$ # Y comprobamos que se han asignado a los dos ReplicaSets de forma
+$ # propocional.
+$ kubectl get rs
+NAME                          DESIRED   CURRENT   READY   AGE
+nginx-deployment-74d589986c   15        15        15      2m4s
+nginx-deployment-dd56879bf    10        10        0       45s
+----
+
+==== Pausa y reanudación de lanzamientos
+
+Es posible poner en pausa los lanzamientos de un despliegue, lo que es útil si
+queremos hacer varios cambios en él y evitar que cada uno de los cambios
+provoque un lanzamiento.  Para hacerlo, se usa la orden `kubectl rollout pause
+<despliegue>`, y para reanudarlos de nuevo se usa `kubectl rollour resume
+<despliegue>`.
 
 == CLI de kubectl
 
@@ -1251,7 +2046,7 @@ Muestra los recursos disponibles a través de la API del cluster:
 
 [source,console]
 ----
-$ kubectl api-resources 
+$ kubectl api-resources
 NAME                              SHORTNAMES   APIVERSION                             NAMESPACED   KIND
 bindings                                       v1                                     true         Binding
 componentstatuses                 cs           v1                                     false        ComponentStatus
@@ -1503,10 +2298,10 @@ Containers:
       /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-zvnwb (ro)
 Conditions:
   Type              Status
-  Initialized       True 
-  Ready             True 
-  ContainersReady   True 
-  PodScheduled      True 
+  Initialized       True
+  Ready             True
+  ContainersReady   True
+  PodScheduled      True
 Volumes:
   config-volume:
     Type:      ConfigMap (a volume populated by a ConfigMap)
@@ -1527,7 +2322,6 @@ Tolerations:                 CriticalAddonsOnly op=Exists
                              node.kubernetes.io/unreachable:NoExecute op=Exists for 300s
 Events:                      <none>
 ----
-
 
 [[kubectl_get,`kubectl get`]]
 ==== kubectl get
@@ -1618,6 +2412,104 @@ default       endpoints/kubernetes                 192.168.49.2:8443            
 kube-system   endpoints/k8s.io-minikube-hostpath   <none>                                        16h
 kube-system   endpoints/kube-dns                   10.244.0.2:53,10.244.0.2:53,10.244.0.2:9153   16h
 ...
+----
+
+[[kubectl_get_events,`kubectl_get events`]]
+===== kubectl get events
+
+Muestra los eventos que se han producido en el cluster:
+
+[source,console]
+----
+$ kubectl get events
+LAST SEEN   TYPE      REASON      OBJECT                    MESSAGE
+32m         Normal    Pulling     pod/pod-2containers-lp   Pulling image "nginx"
+27m         Warning   BackOff     pod/pod-2containers-lp   Back-off restarting failed container
+24m         Normal    Scheduled   pod/pod-2containers-lp   Successfully assigned blas/pod-2containers-lp to minikube-m03
+24m         Normal    Pulling     pod/pod-2containers-lp   Pulling image "nginx"
+24m         Normal    Pulled      pod/pod-2containers-lp   Successfully pulled image "nginx" in 1.386338018s
+24m         Normal    Created     pod/pod-2containers-lp   Created container nginx
+24m         Normal    Started     pod/pod-2containers-lp   Started container nginx
+13m         Normal    Pulling     pod/pod-2containers-lp   Pulling image "nginx"
+24m         Normal    Pulled      pod/pod-2containers-lp   Successfully pulled image "nginx" in 1.398490586s
+18m         Normal    Created     pod/pod-2containers-lp   Created container loop
+18m         Normal    Started     pod/pod-2containers-lp   Started container loop
+18m         Warning   Unhealthy   pod/pod-2containers-lp   Liveness probe failed:
+18m         Normal    Killing     pod/pod-2containers-lp   Container loop failed liveness probe, will be restarted
+20m         Normal    Pulled      pod/pod-2containers-lp   Successfully pulled image "nginx" in 1.403924337s
+19m         Normal    Pulled      pod/pod-2containers-lp   Successfully pulled image "nginx" in 1.35347142s
+18m         Normal    Pulled      pod/pod-2containers-lp   Successfully pulled image "nginx" in 1.342802789s
+4m14s       Warning   BackOff     pod/pod-2containers-lp   Back-off restarting failed container
+----
+
+Podemos filtrar los eventos utilizando la opción `--field-selector`:
+
+[source,console]
+----
+$ kubectl get event --field-selector involvedObject.name=pod-2containers-lp --watch
+LAST SEEN   TYPE      REASON      OBJECT                    MESSAGE
+15m         Normal    Pulling     pod/pod-2containers-lp   Pulling image "nginx"
+10m         Warning   BackOff     pod/pod-2containers-lp   Back-off restarting failed container
+7m26s       Normal    Scheduled   pod/pod-2containers-lp   Successfully assigned blas/pod-2containers-lp to minikube-m03
+7m25s       Normal    Pulling     pod/pod-2containers-lp   Pulling image "nginx"
+7m23s       Normal    Pulled      pod/pod-2containers-lp   Successfully pulled image "nginx" in 1.386338018s
+7m23s       Normal    Created     pod/pod-2containers-lp   Created container nginx
+7m23s       Normal    Started     pod/pod-2containers-lp   Started container nginx
+70s         Normal    Pulling     pod/pod-2containers-lp   Pulling image "nginx"
+7m22s       Normal    Pulled      pod/pod-2containers-lp   Successfully pulled image "nginx" in 1.398490586s
+69s         Normal    Created     pod/pod-2containers-lp   Created container loop
+69s         Normal    Started     pod/pod-2containers-lp   Started container loop
+101s        Warning   Unhealthy   pod/pod-2containers-lp   Liveness probe failed:
+101s        Normal    Killing     pod/pod-2containers-lp   Container loop failed liveness probe, will be restarted
+3m29s       Normal    Pulled      pod/pod-2containers-lp   Successfully pulled image "nginx" in 1.403924337s
+2m39s       Normal    Pulled      pod/pod-2containers-lp   Successfully pulled image "nginx" in 1.35347142s
+69s         Normal    Pulled      pod/pod-2containers-lp   Successfully pulled image "nginx" in 1.342802789s
+0s          Normal    Pulling     pod/pod-2containers-lp   Pulling image "nginx"
+0s          Warning   BackOff     pod/pod-2containers-lp   Back-off restarting failed container
+0s          Warning   BackOff     pod/pod-2containers-lp   Back-off restarting failed container
+0s          Warning   BackOff     pod/pod-2containers-lp   Back-off restarting failed container
+----
+
+Para ver los campos disponibles, podemos ver la salida de la orden en formato
+YAML o JSON:
+
+[source,console]
+----
+$ kubectl get events --output yaml
+----
+
+[source,yaml]
+----
+apiVersion: v1
+items:
+- apiVersion: v1
+  count: 31
+  eventTime: null
+  firstTimestamp: "2022-07-07T08:40:33Z"
+  involvedObject:
+    apiVersion: v1
+    fieldPath: spec.containers{loop}
+    kind: Pod
+    name: pod-2containers-lp
+    namespace: blas
+    resourceVersion: "150054"
+    uid: b0f82f82-f36a-49a7-912d-d18e0adc7263
+  kind: Event
+  lastTimestamp: "2022-07-07T10:05:44Z"
+  message: Pulling image "nginx"
+  metadata:
+    creationTimestamp: "2022-07-07T08:40:33Z"
+    name: pod-2containers-lp.16ff7f5ef5fe36ae
+    namespace: blas
+    resourceVersion: "154763"
+    uid: 8aa20f78-0609-4906-a00b-4e21a6b85c3f
+  reason: Pulling
+  reportingComponent: ""
+  reportingInstance: ""
+  source:
+    component: kubelet
+    host: minikube-m03
+  type: Normal
 ...
 ----
 
@@ -1853,10 +2745,10 @@ tenemos corriendo en el cluster la API de métricas proporcionada por
 [source,console]
 ----
 $ kubectl top node
-NAME           CPU(cores)   CPU%   MEMORY(bytes)   MEMORY%   
-minikube       196m         4%     1456Mi          9%        
-minikube-m02   51m          1%     405Mi           2%        
-minikube-m03   44m          1%     357Mi           2%        
+NAME           CPU(cores)   CPU%   MEMORY(bytes)   MEMORY%
+minikube       196m         4%     1456Mi          9%
+minikube-m02   51m          1%     405Mi           2%
+minikube-m03   44m          1%     357Mi           2%
 ----
 
 === Contextos
@@ -1951,6 +2843,23 @@ users:
 $ diff ~/.kube/config (kubectl config view | psub)
 $
 ----
+
+== Troubleshooting
+
+Las órdenes más útiles para ver lo que ocurre dentro del cluster de K8s son
+<<kubectl_get>>,  <<kubectl_get_events>> y <<kubectl_describe>>.
+
+== Otras herramientas
+
+=== kustomize
+
+https://github.com/kubernetes-sigs/kustomize[kustomize] sirve para aplicar
+cambios a plantillas YAML de K8s sin tener que modificar los archivos
+originales, combinando funcionalidades de herramientas como `make` y `sed`.
+
+=== helm
+
+WARNING: TODO
 
 == Para saber más
 
